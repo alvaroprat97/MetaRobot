@@ -11,7 +11,7 @@ from numpy.random import random_sample
 from numpy import pi as np_pi
 import numpy as np
 import functools
-
+import torch
 pymunkoptions.options["debug"] = False
 
 # Meta Variables
@@ -57,12 +57,15 @@ class StaticEnvironment:
         mid_frame = 360
         peg_girth = 40
         peg_depth = 200
+        thresh = 1000
 
-        seg_list = [(Vec2d(peg_pos_x,0),Vec2d(0,mid_frame - peg_girth//2)),
+        seg_list = [(Vec2d(peg_pos_x,0 - thresh),Vec2d(0,mid_frame - peg_girth//2 + thresh)),
                      (Vec2d(peg_pos_x,mid_frame - peg_girth//2),Vec2d(peg_depth,0)),
                      (Vec2d(peg_pos_x + peg_depth,mid_frame - peg_girth//2),Vec2d(0,peg_girth)),
                      (Vec2d(peg_pos_x + peg_depth,mid_frame + peg_girth//2),Vec2d(-peg_depth,0)),
-                     (Vec2d(peg_pos_x,mid_frame + peg_girth//2),Vec2d(0,WINDOW_Y - mid_frame - peg_girth//2))]
+                     (Vec2d(peg_pos_x,mid_frame + peg_girth//2),Vec2d(0,thresh + WINDOW_Y - mid_frame - peg_girth//2))]
+
+        self.goal_pos = Vec2d(peg_pos_x, mid_frame)
 
         for segment in seg_list:
             self.add_static_segment(*segment)
@@ -129,7 +132,9 @@ class RobotEnvironment:
             len_x = 0
             len_y = 0
             for idx in range(self.Arms.n):
-                rand_angle = random_sample()*np_pi - np_pi*0.5
+                rand_angle = 0.5*np_pi*(random_sample() - 0.5)
+                if idx is 0:
+                    rand_angle *= 2
                 length = self.Arms.lengths[idx]
                 len_x += length*cos(rand_angle)
                 len_y += length*sin(rand_angle)
@@ -231,7 +236,7 @@ class RobotEnvironment:
         self.add_constraints()
 
     def limit_velox(self, body, gravity, damping, dt):
-        max_velox = 200.0
+        max_velox = 100
         max_velox_angular = np_pi
         pymunk.Body.update_velocity(body, gravity, damping, dt)
         l = body.velocity.length
@@ -279,6 +284,18 @@ class RobotEnvironment:
         p2 = (self.action_high + self.action_low)/2
         return p1*(action-p2)
 
+    def get_peg_tip(self):
+        peg_tip = Vec2d(ORIGIN) if isinstance(ORIGIN, tuple) else ORIGIN
+        lengths = self.Arms.lengths
+        idx = 0
+        for body in self.bodies:
+            # if body is static, pass
+            if body.body_type is 2:
+                continue
+            peg_tip += lengths[idx]*Vec2d(np.cos(body.angle), np.sin(body.angle))
+            idx += 1
+        return peg_tip
+
     def get_state(self):
         """Get state, currently showing tuples for each body:
             [0] Vec2d POSITION
@@ -286,8 +303,12 @@ class RobotEnvironment:
             [2] Scalar ANGLE (Of each body in radians)
             [3] Scalar ANGULAR VELOCITY
         """
-        peg = self.bodies[-1]
-        self.state = [peg.position.x, peg.position.y, peg.angle]
+
+        # peg = self.bodies[-1]
+        peg = self.get_peg_tip()
+        true_angle = peg.angle - (peg.angle//np.pi)*np.pi
+        peg_tip = self.get_peg_tip()
+        self.state = [peg.x, peg.y, true_angle]
         return np.array(self.state)
 
 
@@ -303,10 +324,40 @@ class Frontend(pyglet.window.Window):
         self.options = DrawOptions()
 
         self.env = StaticEnvironment(self.space)
-        self.robo = RobotEnvironment(self.space, arm_lengths=[275, 275, 200], radii = [5, 5, 10])
+        self.robo = RobotEnvironment(self.space, arm_lengths=[300, 250, 200], radii = [5, 5, 10])
         self.action_range = {'low':self.robo.action_low, 'high':self.robo.action_high}
         self.num_states = 2 + 1 # FROM PEG State
         self.num_actions = 2 + 1 # FROM PEG VELOX
+        self._max_episode_steps = 0
+        self._denorm_process = True
+        self._print_counter = 0
+        self.encountered = 0
+
+    @property
+    def denorm_process(self):
+        return self._denorm_process
+
+    @denorm_process.setter
+    def denorm_process(self, denorm):
+        if isinstance(denorm, bool):
+            self._denorm_process = denorm
+        else:
+            print("Please enter a boolean if you want to denorm or not the actions")
+
+    @property
+    def max_episode_steps(self):
+        return self._max_episode_steps
+
+    @max_episode_steps.setter
+    def max_episode_steps(self, step):
+        if step > 0 and isinstance(step, int):
+            self._max_episode_steps = step
+        else:
+            print("Please enter a valid maximum step size")
+
+    def random_action(self):
+        rand = np.random.random(3)*2-1
+        return self.robo.denorm_action(rand)
 
     def set_visibles(self):
         if self.visible:
@@ -322,27 +373,34 @@ class Frontend(pyglet.window.Window):
         self.robo.reset_bodies(random_reset = True)
         return self.robo.get_state()
 
-    def step_func(self, action, dt = 1/60):
+    def step_func(self, action, dt = 1/60, step = 0):
         """Action comes normalised?"""
-        denormed_action = self.robo.denorm_action(action)
-        # print(f'My action is {action} and denormed action is {denormed_action}')
         dummy = 0
-        self.update(dt, denormed_action)
+        if self._denorm_process:
+            print("Denorming")
+            action = self.robo.denorm_action(action)
+        self.update(dt, action)
         new_state = self.robo.get_state()
-        reward = self.robo.bodies[-1].position.x/WINDOW_X - 3*abs(self.robo.bodies[-1].position.y - ORIGIN[1])/WINDOW_Y
-        if self.robo.bodies[-1].position.x > 1000:
-            reward = 10
-            done = True
-            print('MADE IT')
+        # pos = self.robo.bodies[-1].position
+        pos = self.robo.get_peg_tip()
+        reward = (pos.x - ORIGIN[0])/WINDOW_X - 0.5
 
-        done = False # Don't allow episode rest
+        done = False
+
+        if (step+1) % self.max_episode_steps == 0:
+            # print('Episode Run-Out')
+            done = True
+
+        if pos.x > 1100:
+            reward = 100
+            self.encountered += 1
+            done = True
+            print(f"\n MADE IT {self.encountered} TIMES TO GOAL \n")
 
         return new_state, reward, done, dummy
 
     def update(self, dt = 1/60, action = None):
-        # # Angular velocities
-        # for idx, body in enumerate(self.robo.bodies[1:]):
-        #     body.angular_velocity = action[idx] if action is not None else self.robo.action_buffered[idx]
+
         if action is not None:
             peg = self.robo.bodies[-1]
             peg.velocity = action[0], action[1]
@@ -352,11 +410,18 @@ class Frontend(pyglet.window.Window):
             self.space.step(dt)
 
     def policy_update(self, dt):
-        state = self.robo.get_state()
-        action = self.agent.get_action(state)
-        # action = self.noise.get_action(action, 0)
-        denorm_action = self.robo.denorm_action(action)
-        self.update(action = denorm_action, dt = dt)
+        state = np.array(self.robo.get_state())
+        if self._denorm_process:
+            # DDPG
+            action = self.agent.get_action(state, evaluate = True)
+            action = self.robo.denorm_action(action)
+        else:
+            #SAC
+            action = self.agent.get_action(state, evaluate = True)
+        pos = self.robo.get_peg_tip()
+        if pos.x >1100:
+            print("MADE IT, CONGRATS")
+        self.update(action = action, dt = dt)
 
     def run_policy(self, agent):
         self.set_visible(visible = True)
@@ -447,6 +512,8 @@ class Frontend(pyglet.window.Window):
 
     def on_mouse_press(self, x, y, button, modifier):
         print(x,y)
+        print((x - ORIGIN[0])/WINDOW_X)
+        print(self.robo.get_peg_tip())
         point_q = self.space.point_query_nearest((x,y), 0, pymunk.ShapeFilter())
         if point_q:
             print(point_q.shape, point_q.shape.body)
