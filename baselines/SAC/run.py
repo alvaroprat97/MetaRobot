@@ -3,7 +3,7 @@ import argparse
 import datetime
 import sys
 sys.path.insert(0,'../../envs/')
-sys.path.insert(0,'../Core/')
+sys.path.insert(0,'../core/')
 import os
 from utils import *
 from global_vars import BATCH_SIZE, DT, SEED
@@ -28,29 +28,31 @@ if not os.path.exists(critic_path):
 variant = dict(
         algorithm="SAC",
         version="normal",
-        seed = 0,
-        replay_buffer_size=int(1e5),
+        seed = 5,
+        replay_buffer_size=int(2e5),
         save_model = True,
+
         algorithm_kwargs=dict(
             num_epochs= 25,
             num_eval_steps_per_epoch= 2500,
             num_train_loops_per_epoch = 5,
-            num_trains_per_train_loop= 100,
-            num_expl_steps_per_train_loop = 1000,
-            min_num_steps_before_training = 2500, # Random exploration steps Initially
-            max_path_length=500,
-            batch_size=256,
+            num_trains_per_train_loop= 500, # Was 100
+            num_expl_steps_per_train_loop = 2500,
+            min_num_steps_before_training = 0, #5000, # Random exploration steps Initially
+            max_path_length= 250,
+            batch_size = 256,
+            prioritised_experience = True,
         ),
 
         trainer_kwargs=dict(
             gamma=0.99,
             tau=5e-3,
             target_update_interval=1,
-            lr=3e-4,
+            lr=1e-3, # Was 5e-3
             alpha = 0.2,
             policy = "Gaussian",
             automatic_entropy_tuning=True,
-            hidden_size = 256
+            hidden_size = 128,
         ),
 
         env_args = [
@@ -91,16 +93,14 @@ writer = SummaryWriter(logdir=log_dir)
 # Replay Memory
 replay_buffer = ReplayBuffer(variant['replay_buffer_size'])
 
-# ####################
-# # MAIN training loop
-# ####################
+# training
 RL_trainer = BatchRLAlgorithm(replay_buffer, **variant['algorithm_kwargs'])
 RL_trainer.train(env, agent, writer)
 
+# Save model
 if variant['save_model']:
     agent.save_model("Peg2D")
-# # PER is a good idea for SAC because once we get BIG erwards... the critic is very unstable,
-# # so values with high TD error are definately more important
+
 # # Normalised states?
 
 ### Test

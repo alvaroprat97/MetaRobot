@@ -8,23 +8,17 @@ LOG_SIG_MIN = -20
 epsilon = 1e-6
 
 # Initialize Policy weights
-# def weights_init(m):
-#     classname = m.__class__.__name__
-#     if classname.find("Conv") != -1:
-#         torch.nn.init.kaiming_normal_(m.weight)
-#         if m.bias is not None:
-#             torch.nn.init.zeros_(m.bias)
-#     elif classname.find("BatchNorm") != -1:
-#         m.weight.data.normal_(1.0, 0.02)
-#         m.bias.data.fill_(0)
-#     elif isinstance(m, torch.nn.Linear):
-#         torch.nn.init.xavier_uniform_(m.weight)
-#         torch.nn.init.constant_(m.bias, 0)
-
-# Initialize Policy weights
 def weights_init(m):
-    if isinstance(m, nn.Linear):
-        torch.nn.init.xavier_uniform_(m.weight, gain=1/2)
+    classname = m.__class__.__name__
+    if classname.find("Conv") != -1:
+        torch.nn.init.kaiming_normal_(m.weight)
+        if m.bias is not None:
+            torch.nn.init.zeros_(m.bias)
+    elif classname.find("BatchNorm") != -1:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
+    elif isinstance(m, torch.nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight, gain = 1)
         torch.nn.init.constant_(m.bias, 0)
 
 class DeterministicPolicy(nn.Module):
@@ -75,7 +69,7 @@ class ValueNetwork(nn.Module):
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
         self.linear3 = nn.Linear(hidden_dim, 1)
 
-        self.apply(weights_init_)
+        self.apply(weights_init)
 
     def forward(self, state):
         x = F.relu(self.linear1(state))
@@ -137,28 +131,28 @@ class GaussianPolicy(nn.Module):
     def forward(self, state):
         x = F.relu(self.linear1(state))
         x = F.relu(self.linear2(x))
+
         mean = self.mean_linear(x)
         log_std = self.log_std_linear(x)
+
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
 
     def sample(self, state, resample = True):
+
         mean, log_std = self.forward(state)
         std = log_std.exp()
         normal = Normal(mean, std)
-        if resample:
-            x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
-        else:
-            x_t = normal.sample()
-        y_t = torch.tanh(x_t)
-        action = y_t * self.action_scale + self.action_bias
-        # if resample == True:
-            # print(f"Mean is {mean} \n std is {std} \n XT is {x_t} \n YT is {y_t} \n action is {action} \n")
-        log_prob = normal.log_prob(x_t)
-        # Enforcing Action Bound
-        log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + epsilon)
+
+        z = normal.rsample()
+        action = torch.tanh(z)
+
+        log_prob = normal.log_prob(z) - torch.log(1 - action.pow(2) + epsilon)
         log_prob = log_prob.sum(1, keepdim=True)
+
+        action = action * self.action_scale + self.action_bias
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
+
         return action, log_prob, mean
 
     def to(self, device):

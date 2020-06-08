@@ -17,7 +17,9 @@ pymunkoptions.options["debug"] = False
 # Meta Variables
 WINDOW_X = 1280
 WINDOW_Y = 720
-ORIGIN = (400.0, 360.0) # Robot gripper origin
+ORIGIN = (400, 360) # Robot gripper origin
+GOAL = Vec2d(1000, 250)
+PEG_DEPTH = 200
 
 class StaticEnvironment:
     def __init__(self, space, sprites = None):
@@ -53,10 +55,10 @@ class StaticEnvironment:
         """
 
         # Static Coordinates for peg
-        peg_pos_x = 1000
-        mid_frame = 360
+        peg_pos_x = GOAL.x
+        mid_frame = GOAL.y
         peg_girth = 40
-        peg_depth = 200
+        peg_depth = PEG_DEPTH
         thresh = 1000
 
         seg_list = [(Vec2d(peg_pos_x,0 - thresh),Vec2d(0,mid_frame - peg_girth//2 + thresh)),
@@ -139,8 +141,11 @@ class RobotEnvironment:
                 len_x += length*cos(rand_angle)
                 len_y += length*sin(rand_angle)
                 self.Arms.pos[idx] = (length, rand_angle)
-            if len_x < 1000 - ORIGIN[0] and abs(len_y) < 150:
+            if len_x < GOAL.x - ORIGIN[0] and abs(len_y) < 150:
                 got = True
+                if iterator > 250:
+                    print(f"Got at {iterator}")
+                    raise ArithmeticError("Cannot get an environment like that, change the origin")
             else:
                 iterator += 1
                 self.Arms.pos = [None]*self.Arms.n
@@ -301,14 +306,18 @@ class RobotEnvironment:
             [0] Vec2d POSITION
             [1] Scalar VELOCITY (mid-center of body arms)
             [2] Scalar ANGLE (Of each body in radians)
-            [3] Scalar ANGULAR VELOCITY
         """
 
-        # peg = self.bodies[-1]
         peg = self.get_peg_tip()
-        true_angle = peg.angle - (peg.angle//np.pi)*np.pi
-        peg_tip = self.get_peg_tip()
-        self.state = [peg.x, peg.y, true_angle]
+        body = self.bodies[-1]
+        true_angle = body.angle
+        assert body.id is 'peg'
+        # peg_tip = self.get_peg_tip()
+        # oscillations = peg.angle//np.pi
+        # remainder = peg.angle - oscillations*np.pi
+        # self.state = [(peg.x - ORIGIN[0])/WINDOW_X, (peg.y - ORIGIN[1])/WINDOW_Y, np.cos(true_angle), np.sin(true_angle)]
+        self.state = [GOAL.x - peg.x, GOAL.y - peg.y, np.cos(true_angle), np.sin(true_angle)]
+        # self.state = [(peg.x - 1000), (peg.y - 360)]
         return np.array(self.state)
 
 
@@ -324,13 +333,14 @@ class Frontend(pyglet.window.Window):
         self.options = DrawOptions()
 
         self.env = StaticEnvironment(self.space)
-        self.robo = RobotEnvironment(self.space, arm_lengths=[300, 250, 200], radii = [5, 5, 10])
+        self.robo = RobotEnvironment(self.space, arm_lengths=[300, 250, 200], radii = [7, 5, 10])
         self.action_range = {'low':self.robo.action_low, 'high':self.robo.action_high}
-        self.num_states = 2 + 1 # FROM PEG State
+        self.num_states = 2 + 2 # FROM PEG State
         self.num_actions = 2 + 1 # FROM PEG VELOX
         self._max_episode_steps = 0
         self._denorm_process = True
         self._print_counter = 0
+        self.evaluate = True
         self.encountered = 0
 
     @property
@@ -357,6 +367,8 @@ class Frontend(pyglet.window.Window):
 
     def random_action(self):
         rand = np.random.random(3)*2-1
+        # if self.denorm_process:
+        #     return self.robo.denorm_action(rand)
         return self.robo.denorm_action(rand)
 
     def set_visibles(self):
@@ -374,28 +386,24 @@ class Frontend(pyglet.window.Window):
         return self.robo.get_state()
 
     def step_func(self, action, dt = 1/60, step = 0):
-        """Action comes normalised?"""
-        dummy = 0
-        if self._denorm_process:
-            print("Denorming")
-            action = self.robo.denorm_action(action)
-        self.update(dt, action)
-        new_state = self.robo.get_state()
-        # pos = self.robo.bodies[-1].position
-        pos = self.robo.get_peg_tip()
-        reward = (pos.x - ORIGIN[0])/WINDOW_X - 0.5
+        """Action comes normalised in DDPG and TD3
+        Not in SAC so if it is SAC we shouldn't denormalise"""
 
+        dummy = 0
         done = False
+
+        if self.denorm_process:
+            print("Denormalising")
+            action = self.robo.denorm_action(action)
+
+        self.update(dt=dt, action=action)
+
+        new_state = self.robo.get_state()
+        reward, done = self.reward_func(done, new_state)
 
         if (step+1) % self.max_episode_steps == 0:
             # print('Episode Run-Out')
             done = True
-
-        if pos.x > 1100:
-            reward = 100
-            self.encountered += 1
-            done = True
-            print(f"\n MADE IT {self.encountered} TIMES TO GOAL \n")
 
         return new_state, reward, done, dummy
 
@@ -409,18 +417,49 @@ class Frontend(pyglet.window.Window):
         for r in range(10):
             self.space.step(dt)
 
+    def reward_func(self, done, state):
+
+        mask = done
+
+        # state = self.robo.get_state()
+
+        reward =  -Vec2d(state[0], state[1]).length/1000 #(state[0] - WINDOW_X)/WINDOW_X #
+
+        peg_tip = self.robo.get_peg_tip()
+
+        if peg_tip.x > 975 and abs(peg_tip.y - GOAL.y) < 50 and abs(state[-1]) < 0.20: #
+            # print("ALmost Made it")
+            reward += 0.1
+
+        if peg_tip.x > GOAL.x and abs(peg_tip.y - GOAL.y) < 25 and abs(state[-1]) < 0.10: #
+            reward += 0.5
+
+        if peg_tip.x > GOAL.x + 50:
+            reward += 1
+
+        if peg_tip.x > GOAL.x + 100:
+            reward += 20
+            self.encountered += 1
+            mask = True
+            print(f"\n MADE IT {self.encountered} TIMES TO GOAL \n")
+
+        return reward, mask
+
     def policy_update(self, dt):
         state = np.array(self.robo.get_state())
         if self._denorm_process:
             # DDPG
-            action = self.agent.get_action(state, evaluate = True)
+            action = self.agent.get_action(state, evaluate = self.evaluate)
             action = self.robo.denorm_action(action)
         else:
-            #SAC
-            action = self.agent.get_action(state, evaluate = True)
+            #SAC, TD3
+            action = self.agent.get_action(state, evaluate = self.evaluate)
         pos = self.robo.get_peg_tip()
+
         if pos.x >1100:
+            print(pos, self.robo.bodies[-1].position)
             print("MADE IT, CONGRATS")
+
         self.update(action = action, dt = dt)
 
     def run_policy(self, agent):
@@ -511,9 +550,10 @@ class Frontend(pyglet.window.Window):
             pyglet.image.get_buffer_manager().get_color_buffer().save('RobotArm.png')
 
     def on_mouse_press(self, x, y, button, modifier):
-        print(x,y)
-        print((x - ORIGIN[0])/WINDOW_X)
-        print(self.robo.get_peg_tip())
+        r, d, angle, peg_tip = self.reward_func(False)
+
+        print(r, d, angle, peg_tip)
+
         point_q = self.space.point_query_nearest((x,y), 0, pymunk.ShapeFilter())
         if point_q:
             print(point_q.shape, point_q.shape.body)

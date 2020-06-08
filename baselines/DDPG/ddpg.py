@@ -1,6 +1,8 @@
 # Based on https://github.com/openai/baselines/tree/master/baselines/ddpg
 # https://openai.com/blog/better-exploration-with-parameter-noise/
 
+import sys
+sys.path.insert(0, '../core/')
 import torch
 import torch.autograd
 import torch.optim as optim
