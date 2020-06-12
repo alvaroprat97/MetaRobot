@@ -71,10 +71,10 @@ def rollout(env, agent,
             break
         
     if writer is not None:
-        writer.add_scalar('action/action_x', a[0], iter_counter + path_length)
-        writer.add_scalar('action/action_y', a[1], iter_counter + path_length)
-        writer.add_scalar('action/action_y', a[1], iter_counter + path_length)
-        writer.add_scalar('reward/reward', path_reward, iter_counter + path_length)
+        writer.add_scalar('action/action_x', a[0])#, iter_counter + path_length)
+        writer.add_scalar('action/action_y', a[1])#, iter_counter + path_length)
+        writer.add_scalar('action/action_y', a[1])#, iter_counter + path_length)
+        writer.add_scalar('reward/reward', path_reward)#, iter_counter + path_length)
 
     actions = np.array(actions)
     if len(actions.shape) == 1:

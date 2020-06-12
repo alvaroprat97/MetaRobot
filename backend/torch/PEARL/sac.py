@@ -272,9 +272,13 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
 
             self.eval_statistics['QF Loss'] = np.mean(ptu.get_numpy(qf_loss))
             self.eval_statistics['VF Loss'] = np.mean(ptu.get_numpy(vf_loss))
-            self.eval_statistics['Policy Loss'] = np.mean(ptu.get_numpy(
-                policy_loss
-            ))
+            self.eval_statistics['Policy Loss'] = np.mean(ptu.get_numpy(policy_loss))
+
+            self.writer.add_scalar('loss/QF',np.mean(ptu.get_numpy(qf_loss)))
+            self.writer.add_scalar('loss/VF',np.mean(ptu.get_numpy(vf_loss)))
+            self.writer.add_scalar('loss/Policy',np.mean(ptu.get_numpy(policy_loss)))
+            self.writer.add_scalar('loss/KL',ptu.get_numpy(kl_loss))
+            
             self.eval_statistics.update(create_stats_ordered_dict(
                 'Q Predictions',
                 ptu.get_numpy(q1_pred),

@@ -54,7 +54,7 @@ def experiment(variant):
     encoder_model = RecurrentEncoder if recurrent else MlpEncoder
 
     context_encoder = encoder_model(
-        hidden_sizes=[200, 200, 200],
+        hidden_sizes=[128, 128, 128],
         input_size=context_encoder_input_dim,
         output_size=context_encoder_output_dim,
     )
@@ -133,6 +133,7 @@ def experiment(variant):
             algorithm.writer = writer
         algorithm.train()
     elif variant['modality'] is 'test':
+        algorithm.training_mode(False)
         run_policy(agent, task_idx=0, framework='PEARL')
 
 if __name__ == "__main__":

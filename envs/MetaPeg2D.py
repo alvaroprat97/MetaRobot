@@ -20,7 +20,7 @@ WINDOW_Y = 720
 ORIGIN = (400, 360) # Robot gripper origin
 PEG_DEPTH = 200
 
-class StaticEnvironment:
+class StaticEnvironment(object):
     def __init__(self, space, GOAL, sprites = None):
         self.sprites = sprites
         self.space = space
@@ -100,19 +100,19 @@ class Segment:
         shape.color = (0, 255, 0, 0)
         space.add(self.body, shape)
 
-class RobotEnvironment:
+class RobotEnvironment(object):
     def __init__(self, space, arm_lengths = [250, 200, 200], radii = [5, 5, 10], GOAL = (1000, 400)):
         self.space = space
         self.GOAL = GOAL
         self.PivotPoints = [None]*(1+len(arm_lengths))
         self.PivotPoints[0] = (ORIGIN,0)
         self.Arms = Arms(arm_lengths, radii = radii)
-        self.set_action_range(vals = [(2, 50), (1, np_pi/8)]) # 2 Velocities and 1 angular velocity
+        self.range_multiplier = 5
+        self.set_action_range(vals = [(2, 20), (1, np_pi/16)]) # 2 Velocities and 1 angular velocity
         self.init_arms()
         self.init_robot()
         self.obs = self.get_obs()
         self.point_b, self.point_a = None, None
-        
         
     def init_arms(self):
         self.random_arm_generator()
@@ -127,8 +127,8 @@ class RobotEnvironment:
                 highs.append(val[1])
         high = np.array(highs)
         self.num_action_types = nums
-        self.action_high = high
-        self.action_low = -high
+        self.action_high = high*self.range_multiplier
+        self.action_low = -high*self.range_multiplier
         self.action_buffered = np.zeros((sum(nums),))
 
     def random_arm_generator(self):
@@ -145,7 +145,7 @@ class RobotEnvironment:
                 len_x += length*cos(rand_angle)
                 len_y += length*sin(rand_angle)
                 self.Arms.pos[idx] = (length, rand_angle)
-            if len_x < self.GOAL.x - ORIGIN[0] and ( self.GOAL.x - ORIGIN[0] - len_x) < 150 and abs(len_y + ORIGIN[1] - self.GOAL.y) < 150:
+            if len_x < self.GOAL.x - ORIGIN[0] and ( self.GOAL.x - ORIGIN[0] - len_x) < 100 and abs(len_y + ORIGIN[1] - self.GOAL.y) < 100:
                 got = True
                 if iterator > 500:
                     print(f"Got at {iterator}")
