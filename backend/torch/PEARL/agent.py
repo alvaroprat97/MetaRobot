@@ -9,8 +9,20 @@ sys.path.append("")
 
 import backend.torch.pytorch_util as ptu
 
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find("Conv") != -1:
+        torch.nn.init.kaiming_normal_(m.weight)
+        if m.bias is not None:
+            torch.nn.init.zeros_(m.bias)
+    elif classname.find("BatchNorm") != -1:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
+    elif isinstance(m, torch.nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight, gain = 5/3)
+        torch.nn.init.constant_(m.bias, 0)
 
-def _product_of_gaussians(mus, sigmas_squared):
+def _product_of_gaussians(mus, sigmas_squared, GNN = True):
     '''
     compute mu, sigma of product of gaussians
     '''
@@ -18,7 +30,6 @@ def _product_of_gaussians(mus, sigmas_squared):
     sigma_squared = 1. / torch.sum(torch.reciprocal(sigmas_squared), dim=0)
     mu = sigma_squared * torch.sum(mus / sigmas_squared, dim=0)
     return mu, sigma_squared
-
 
 def _mean_of_gaussians(mus, sigmas_squared):
     '''
@@ -49,18 +60,28 @@ class PEARLAgent(nn.Module):
                  latent_dim,
                  context_encoder,
                  policy,
+                 aux_decoder = None,
+                 aux_params = {},
                  **kwargs
     ):
         super().__init__()
         self.latent_dim = latent_dim
 
         self.context_encoder = context_encoder
+        self.aux_decoder = aux_decoder
         self.policy = policy
 
+        # self.policy.apply(weights_init)
         self.recurrent = kwargs['recurrent']
         self.use_ib = kwargs['use_information_bottleneck']
         self.sparse_rewards = kwargs['sparse_rewards']
         self.use_next_obs_in_context = kwargs['use_next_obs_in_context']
+
+        self.use_aux =  aux_params['use']
+        self.fixed_std = aux_params['fixed_std']
+        self.aux_std = aux_params['aux_std']
+        self.beta = aux_params['beta']
+        self.belief = None
 
         # initialize buffers for z dist and z
         # use buffers so latent context can be saved along with model weights
@@ -131,7 +152,7 @@ class PEARLAgent(nn.Module):
         if self.use_ib:
             mu = params[..., :self.latent_dim]
             sigma_squared = F.softplus(params[..., self.latent_dim:])
-            z_params = [_product_of_gaussians(m, s) for m, s in zip(torch.unbind(mu), torch.unbind(sigma_squared))]
+            z_params = [_product_of_gaussians(m, s) for m, s in zip(torch.unbind(mu), torch.unbind(sigma_squared))]  
             self.z_means = torch.stack([p[0] for p in z_params])
             self.z_vars = torch.stack([p[1] for p in z_params])
         # sum rather than product of gaussians structure
@@ -147,6 +168,22 @@ class PEARLAgent(nn.Module):
         else:
             self.z = self.z_means
 
+    def infer_aux(self):
+        # print("deprecated ...")
+        raw_post = self.aux_decoder(self.z, return_log_prob = False)[1]
+        raw_post = raw_post.view(raw_post.size(0), -1, self.aux_decoder.output_size)
+        assert self.aux_decoder.output_size//2 == self.aux_decoder.output_size/2
+        if self.fixed_std:
+            sigma_squared = torch.ones_like(raw_post)*self.aux_std**2
+            aux_posteriors = [torch.distributions.Normal(m, torch.sqrt(s)) for m, s in zip(torch.unbind(raw_post), torch.unbind(sigma_squared))]
+        else:
+            raise NotImplementedError
+            mu = raw_post[..., :self.aux_decoder.output_size//2]
+            sigma_squared = F.softplus(raw_post[..., self.aux_decoder.output_size//2:])
+            aux_posteriors = [torch.distributions.Normal(m, torch.sqrt(s)) for m, s in zip(torch.unbind(mu), torch.unbind(sigma_squared))]
+        sampled_post = [d.rsample() for d in aux_posteriors]
+        self.belief = torch.stack(sampled_post)
+
     def get_action(self, obs, deterministic=False):
         ''' sample action from the policy, conditioned on the task embedding '''
         z = self.z
@@ -157,10 +194,10 @@ class PEARLAgent(nn.Module):
     def set_num_steps_total(self, n):
         self.policy.set_num_steps_total(n)
 
-    def forward(self, obs, context):
+    def forward(self, obs, context, aux_targets = None):
         ''' given context, get statistics under the current policy of a set of observations '''
         self.infer_posterior(context)
-        self.sample_z()
+        # self.sample_z()
 
         task_z = self.z
 
@@ -173,7 +210,12 @@ class PEARLAgent(nn.Module):
         in_ = torch.cat([obs, task_z.detach()], dim=1)
         policy_outputs = self.policy(in_, reparameterize=True, return_log_prob=True)
 
-        return policy_outputs, task_z
+        if aux_targets is not None:
+            aux_outputs = self.aux_decoder(task_z, task_descriptor = aux_targets, reparameterize = True, return_log_prob = True)
+        else:
+            aux_outputs = None
+
+        return policy_outputs, task_z, aux_outputs
 
     def log_diagnostics(self, eval_statistics):
         '''
@@ -186,8 +228,9 @@ class PEARLAgent(nn.Module):
 
     @property
     def networks(self):
-        return [self.context_encoder, self.policy]
-
-
+        if isinstance(self.aux_decoder, nn.Module):
+            return [self.context_encoder, self.policy, self.aux_decoder]
+        else:
+             return [self.context_encoder, self.policy]
 
 

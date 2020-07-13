@@ -6,12 +6,13 @@ import torch
 import torch.optim as optim
 from torch import nn as nn
 
+from tensorboardX import SummaryWriter
 import backend.torch.pytorch_util as ptu
 from backend.core.eval_util import create_stats_ordered_dict
 from backend.core.meta_rl_algorithm import MetaRLAlgorithm
+import itertools
 
 sys.path.append("")
-
 
 class PEARLSoftActorCritic(MetaRLAlgorithm):
     def __init__(
@@ -21,10 +22,10 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             eval_tasks,
             latent_dim,
             nets,
-
             policy_lr=1e-3,
             qf_lr=1e-3,
             vf_lr=1e-3,
+            aux_lr=1e-3,
             context_lr=1e-3,
             kl_lambda=1.,
             policy_mean_reg_weight=1e-3,
@@ -69,6 +70,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         self.use_next_obs_in_context = use_next_obs_in_context
 
         self.qf1, self.qf2, self.vf = nets[1:]
+            
         self.target_vf = self.vf.copy()
 
         self.policy_optimizer = optimizer_class(
@@ -90,6 +92,10 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         self.context_optimizer = optimizer_class(
             self.agent.context_encoder.parameters(),
             lr=context_lr,
+        )
+        self.aux_optimizer = optimizer_class(
+            self.agent.aux_decoder.parameters(),
+            lr=aux_lr,
         )
 
     ###### Torch stuff #####
@@ -136,6 +142,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         # make method work given a single task index
         if not hasattr(indices, '__iter__'):
             indices = [indices]
+
         batches = [ptu.np_to_pytorch_batch(self.enc_replay_buffer.random_batch(idx, batch_size=self.embedding_batch_size, sequence=self.recurrent)) for idx in indices]
         context = [self.unpack_batch(batch, sparse_reward=self.sparse_rewards) for batch in batches]
         # group like elements together
@@ -155,7 +162,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         mb_size = self.embedding_mini_batch_size
         num_updates = self.embedding_batch_size // mb_size
 
-        # sample context batch
+        # sample context batch, use a batch size (from config) to determine how much context to sample
         context_batch = self.sample_context(indices)
 
         # zero out context and hidden encoder state
@@ -184,13 +191,20 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
 
         # data is (task, batch, feat)
         obs, actions, rewards, next_obs, terms = self.sample_sac(indices)
+        aux_targets = self.env._get_targets(indices)
+
+        # Get auxilliary targets in tensor format
+        t, b, _ = obs.size()
+        targets = [list(torch.tensor(tuple(aux_targets[i])*b, device = ptu.device).split(len(aux_targets[i]))) for i in range(len(indices))]
+        targets = list(itertools.chain(*targets))    
+        targets = torch.stack(targets)
 
         # run inference in networks
-        policy_outputs, task_z = self.agent(obs, context)
+        policy_outputs, task_z, aux_outputs = self.agent(obs, context, aux_targets = targets)
         new_actions, policy_mean, policy_log_std, log_pi = policy_outputs[:4]
+        aux_log_pi = aux_outputs[3]
 
         # flattens out the task dimension
-        t, b, _ = obs.size()
         obs = obs.view(t * b, -1)
         actions = actions.view(t * b, -1)
         next_obs = next_obs.view(t * b, -1)
@@ -211,6 +225,11 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             kl_loss = self.kl_lambda * kl_div
             kl_loss.backward(retain_graph=True)
 
+        # Auxilliary decoder optimisation & gradient flow to encoder
+        self.aux_optimizer.zero_grad()
+        aux_loss = -self.agent.beta*torch.mean(aux_log_pi.flatten())
+        aux_loss.backward(retain_graph=True)
+
         # qf and encoder update (note encoder does not get grads from policy or vf)
         self.qf1_optimizer.zero_grad()
         self.qf2_optimizer.zero_grad()
@@ -223,7 +242,10 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         qf_loss.backward()
         self.qf1_optimizer.step()
         self.qf2_optimizer.step()
+
+        # Also has KL loss
         self.context_optimizer.step()
+        self.aux_optimizer.step()
 
         # compute min Q on the new actions
         min_q_new_actions = self._min_q(obs, new_actions, task_z)
@@ -273,12 +295,15 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             self.eval_statistics['QF Loss'] = np.mean(ptu.get_numpy(qf_loss))
             self.eval_statistics['VF Loss'] = np.mean(ptu.get_numpy(vf_loss))
             self.eval_statistics['Policy Loss'] = np.mean(ptu.get_numpy(policy_loss))
+            self.eval_statistics['Aux Loss'] = np.mean(ptu.get_numpy(aux_loss))
 
-            self.writer.add_scalar('loss/QF',np.mean(ptu.get_numpy(qf_loss)))
-            self.writer.add_scalar('loss/VF',np.mean(ptu.get_numpy(vf_loss)))
-            self.writer.add_scalar('loss/Policy',np.mean(ptu.get_numpy(policy_loss)))
-            self.writer.add_scalar('loss/KL',ptu.get_numpy(kl_loss))
-            
+            if isinstance(self.writer, SummaryWriter):
+                self.writer.add_scalar('loss/QF',np.mean(ptu.get_numpy(qf_loss)),self._n_train_steps_total)
+                self.writer.add_scalar('loss/VF',np.mean(ptu.get_numpy(vf_loss)),self._n_train_steps_total)
+                self.writer.add_scalar('loss/Aux',np.mean(ptu.get_numpy(aux_loss)),self._n_train_steps_total)
+                self.writer.add_scalar('loss/Policy',np.mean(ptu.get_numpy(policy_loss)),self._n_train_steps_total)
+                self.writer.add_scalar('loss/KL',ptu.get_numpy(kl_loss),self._n_train_steps_total)
+
             self.eval_statistics.update(create_stats_ordered_dict(
                 'Q Predictions',
                 ptu.get_numpy(q1_pred),
@@ -309,5 +334,6 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             vf=self.vf.state_dict(),
             target_vf=self.target_vf.state_dict(),
             context_encoder=self.agent.context_encoder.state_dict(),
+            aux_decoder = self.agent.aux_decoder.state_dict(),
         )
         return snapshot

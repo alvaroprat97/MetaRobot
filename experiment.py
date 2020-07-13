@@ -15,16 +15,13 @@ import datetime
 
 from envs.metaENV import ENV, VisualiserWrapper
 from envs.MetaPeg2D import WINDOW_X, WINDOW_Y, ORIGIN, PEG_DEPTH
-# from backend.envs.wrappers import NormalizedBoxEnv
 from backend.torch.PEARL.policies import TanhGaussianPolicy
-from backend.torch.networks import FlattenMlp, MlpEncoder, RecurrentEncoder
+from backend.torch.networks import FlattenMlp, MlpEncoder, RecurrentEncoder, LatentGNNEncoder, NormalAux
 from backend.torch.PEARL.sac import PEARLSoftActorCritic
 from backend.torch.PEARL.agent import PEARLAgent
 from backend.launchers.launcher_util import setup_logger
 import backend.torch.pytorch_util as ptu
 from configs.default import default_config
-
-print("Selecting Default variant for notebook compatiblity ... \n")
 
 def run_policy(agent, task_idx, framework = 'PEARL'):
     env = VisualiserWrapper(WINDOW_X, WINDOW_Y, "RoboPeg2D Simulation", vsync = False, resizable = False, visible = True)
@@ -33,10 +30,22 @@ def run_policy(agent, task_idx, framework = 'PEARL'):
     env.agent = agent
     env.run_policy(agent)
 
+def deep_update_dict(fr, to):
+    ''' update dict of dicts with new values '''
+    # assume dicts have same keys
+    for k, v in fr.items():
+        if type(v) is dict:
+            deep_update_dict(v, to[k])
+        else:
+            to[k] = v
+    return to
+
 def experiment(variant):
 
-    log_dir = 'runs/{}_PEARL_{}'.format(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
-                                        "Peg2DRobot")
+    aux = None 
+
+    log_dir = variant['util_params']['run_dir'] + "runs/{}_{}".format(datetime.datetime.now().strftime("%d_%H"),
+                                        "PEARL")
     writer = SummaryWriter(logdir=log_dir)
 
     env = ENV()
@@ -53,11 +62,25 @@ def experiment(variant):
     recurrent = variant['algo_params']['recurrent']
     encoder_model = RecurrentEncoder if recurrent else MlpEncoder
 
-    context_encoder = encoder_model(
-        hidden_sizes=[128, 128, 128],
-        input_size=context_encoder_input_dim,
-        output_size=context_encoder_output_dim,
-    )
+    if not variant['GNN_encoder']:
+        context_encoder = encoder_model(
+            hidden_sizes=[128, 128, 128], 
+            input_size=context_encoder_input_dim,
+            output_size=context_encoder_output_dim,
+        )
+    else:
+        context_encoder = LatentGNNEncoder(
+                        input_dim= context_encoder_input_dim,
+                        output_size = context_encoder_output_dim,
+                        **variant['LatentGNN']
+        )
+    if variant['aux_loss']:
+        aux_decoder = NormalAux(
+            hidden_sizes = variant['aux_params']['hidden'],
+            input_size = latent_dim,
+            output_size = variant['aux_params']['belief_dim'],
+            std = variant['aux_params']['aux_std']
+        )
     qf1 = FlattenMlp(
         hidden_sizes=[net_size, net_size, net_size],
         input_size=obs_dim + action_dim + latent_dim,
@@ -83,6 +106,8 @@ def experiment(variant):
         latent_dim,
         context_encoder,
         policy,
+        aux_decoder = aux_decoder,
+        aux_params = variant['aux_params'],
         **variant['algo_params']
     )
     algorithm = PEARLSoftActorCritic(
@@ -93,7 +118,7 @@ def experiment(variant):
         latent_dim=latent_dim,
         **variant['algo_params']
     )
-
+    print(agent.context_encoder, agent.aux_decoder)
     # optionally load pre-trained weights
     if variant['path_to_weights'] is not None:
         print(f"Loading existing weights from {variant['path_to_weights']} ... \n")
@@ -102,6 +127,7 @@ def experiment(variant):
         qf1.load_state_dict(torch.load(os.path.join(path, 'qf1.pth')))
         qf2.load_state_dict(torch.load(os.path.join(path, 'qf2.pth')))
         vf.load_state_dict(torch.load(os.path.join(path, 'vf.pth')))
+        aux_decoder.load_state_dict(torch.load(os.path.join(path, 'aux_decoder.pth')))
         # TODO hacky, revisit after model refactor
         algorithm.networks[-2].load_state_dict(torch.load(os.path.join(path, 'target_vf.pth')))
         policy.load_state_dict(torch.load(os.path.join(path, 'policy.pth')))
@@ -110,8 +136,13 @@ def experiment(variant):
         
     # optional GPU mode
     ptu.set_gpu_mode(variant['util_params']['use_gpu'], variant['util_params']['gpu_id'])
-    if ptu.gpu_enabled():
-        algorithm.to()
+    try:
+        if ptu.gpu_enabled():
+            algorithm.to()
+    except:
+        TypeError("Cannot set the GPU in this machine")
+    else:
+        pass
 
     # debugging triggers a lot of printing and logs to a debug directory
     DEBUG = variant['util_params']['debug']
@@ -133,9 +164,18 @@ def experiment(variant):
             algorithm.writer = writer
         algorithm.train()
     elif variant['modality'] is 'test':
+        raise Exception("This implementation is not complete ... \n")
+        idx = variant['test_idx']
+        print(f"Testing on training task sample {idx} with no Context... ")
         algorithm.training_mode(False)
-        run_policy(agent, task_idx=0, framework='PEARL')
+        run_policy(agent, task_idx=idx, framework='PEARL')
 
-if __name__ == "__main__":
+    writer.close()
+
+def run():
+    print("Selecting Default variant for notebook compatiblity ... \n")
     variant = default_config
     experiment(variant)
+
+if __name__ == "__main__":
+    run()

@@ -24,6 +24,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
             agent,
             train_tasks,
             eval_tasks,
+            xplor_agent = None,
             meta_batch=64,
             num_iterations=100,
             num_train_steps_per_itr=1000,
@@ -62,7 +63,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         """
         self.env = env
         self.agent = agent
-        self.exploration_agent = agent # Can potentially use a different policy purely for exploration rather than also solving tasks, currently not being used
+        self.xplor_agent = xplor_agent # Can potentially use a different policy purely for exploration rather than also solving tasks, currently not being used
         self.train_tasks = train_tasks
         self.eval_tasks = eval_tasks
         self.meta_batch = meta_batch
@@ -96,6 +97,8 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         self.plotter = plotter
         self.writer = None
         self.write = False
+        writer = self.writer
+        self.write = True if isinstance(writer, SummaryWriter) else False
 
         self.sampler = InPlacePathSampler(
             env=env,
@@ -111,12 +114,25 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                 env,
                 self.train_tasks,
             )
-
         self.enc_replay_buffer = MultiTaskReplayBuffer(
                 self.replay_buffer_size,
                 env,
                 self.train_tasks,
         )
+
+        # Initialise decoupled exploration policy and exploration buffer
+        self.xplor_sampler, self.xplor_replay_buffer = None, None
+        if self.xplor_agent is not None:
+            self.xplor_sampler = InPlacePathSampler(
+                                        env=env,
+                                        policy=xplor_agent,
+                                        max_path_length=self.max_path_length,
+                                        )
+            self.xplor_replay_buffer = MultiTaskReplayBuffer(
+                                        self.replay_buffer_size,
+                                        env,
+                                        self.train_tasks,
+                                        )
 
         self._n_env_steps_total = 0
         self._n_train_steps_total = 0
@@ -154,9 +170,6 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         gt.reset()
         gt.set_def_unique(False)
 
-        writer = self.writer
-        self.write = True if isinstance(writer, SummaryWriter) else False
-
         # Instantiate a path builder which adds samples and then concatenates them as traces
         self._current_path_builder = PathBuilder()
 
@@ -173,14 +186,13 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                 for idx in self.train_tasks:
                     self.task_idx = idx
                     self.env.set_task_idx(idx)
+                    self.env.reset_task(idx)
                     self.collect_data(num_samples = self.num_initial_steps, 
                                     resample_z_rate = 1, 
                                     update_posterior_rate =  np.inf, 
                                     add_to_enc_buffer=True
                                     )
-                # print('done collecting initial pool \n')
 
-            # print("Sampling from tasks ... ")
             # Sample data from all training tasks.
             for i in range(self.num_tasks_sample):
                 # Select a random task, ODD
@@ -189,26 +201,28 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                 self.env.set_task_idx(idx)
                 # Reset the task environment & buffers for the randomly selected task
                 self.env.reset_task(idx)
+                # Clear the encoder 
                 self.enc_replay_buffer.task_buffers[idx].clear()
 
-                # collect some trajectories with z ~ prior
+            # are THESE trajectories are used for training here and sampling the contexts??
+            # YES, for the encoder replay buffer
+                # collect some trajectories with z ~ prior. We do not update posterior of z.
                 if self.num_steps_prior > 0:
                     self.collect_data(self.num_steps_prior, 1, np.inf)
-                # collect some trajectories with z ~ posterior
+                # collect some trajectories with z ~ posterior. We update the posterior of z. 
                 if self.num_steps_posterior > 0:
                     self.collect_data(self.num_steps_posterior, 1, self.update_post_train)
                 # even if encoder is trained only on samples from the prior, the policy needs to learn to handle z ~ posterior
                 if self.num_extra_rl_steps_posterior > 0:
                     self.collect_data(self.num_extra_rl_steps_posterior, 1, self.update_post_train, add_to_enc_buffer=False)
-            # print("Done sampling from tasks \n ")
 
-            # print("Training on task ...")
             # Sample train tasks and compute gradient updates on parameters.
             for train_step in range(self.num_train_steps_per_itr):
+                if train_step % 500 == 0:
+                    print(f"At training step {train_step}")
                 indices = np.random.choice(self.train_tasks, self.meta_batch)
                 self._do_training(indices)
                 self._n_train_steps_total += 1
-            # print(f"Finished training on epch {it_}")
 
             gt.stamp('train')
 
@@ -251,7 +265,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                                                             max_trajs=update_posterior_rate,
                                                             resample=resample_z_rate,
                                                             writer = self.writer,
-                                                            iter_counter = self._n_env_steps_total
+                                                            iter_counter = self._n_env_steps_total + num_transitions
                                                             )
             num_transitions += n_samples
             self.replay_buffer.add_paths(self.task_idx, paths)
@@ -352,7 +366,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
     def get_epoch_snapshot(self, epoch):
         data_to_save = dict(
             epoch=epoch,
-            exploration_policy=self.exploration_policy,
+            exploration_policy=self.xplor_agent,
         )
         if self.save_environment:
             data_to_save['env'] = self.training_env
@@ -380,9 +394,11 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
 
     def collect_paths(self, idx, epoch, run):
         self.task_idx = idx
+        self.env.set_task_idx(idx)
+        # Reset the task environment & buffers for the randomly selected task
         self.env.reset_task(idx)
-
         self.agent.clear_z()
+
         paths = []
         num_transitions = 0
         num_trajs = 0
@@ -449,7 +465,10 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         train_returns = []
         for idx in indices:
             self.task_idx = idx
+            self.env.set_task_idx(idx)
+            # Reset the task environment & buffers for the randomly selected task
             self.env.reset_task(idx)
+
             paths = []
             for _ in range(self.num_steps_per_eval // self.max_path_length):
                 context = self.sample_context(idx)

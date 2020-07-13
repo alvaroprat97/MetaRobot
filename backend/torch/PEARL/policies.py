@@ -7,14 +7,12 @@ sys.path.append("")
 
 from backend.core.util import Wrapper
 from backend.policies.base import ExplorationPolicy, Policy
-from backend.torch.distributions import TanhNormal
+from backend.torch.distributions import TanhNormal, Normal
 from backend.torch.networks import Mlp
 from backend.torch.core import np_ify
 
-
 LOG_SIG_MAX = 2
 LOG_SIG_MIN = -20
-
 
 class TanhGaussianPolicy(Mlp, ExplorationPolicy):
     """
@@ -52,6 +50,7 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
             init_w=init_w,
             **kwargs
         )
+        self.print_iter = 0
         self.latent_dim = latent_dim
         self.log_std = None
         self.std = std

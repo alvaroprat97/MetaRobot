@@ -3,7 +3,13 @@ import pymunk
 import pymunkoptions
 from pymunk import constraint
 from pymunk.pyglet_util import DrawOptions
-from pyglet.window import key, FPSDisplay
+
+# FPS Display is not available for colab... 
+try:    
+    from pyglet.window import key, FPSDisplay
+except:
+    pass
+    
 from math import degrees
 from pymunk import Vec2d
 from numpy import cos, sin
@@ -17,8 +23,19 @@ pymunkoptions.options["debug"] = False
 # Meta Variables
 WINDOW_X = 1280
 WINDOW_Y = 720
-ORIGIN = (400, 360) # Robot gripper origin
+ORIGIN = (200, 360) # Robot gripper origin
 PEG_DEPTH = 200
+DT = 1/5
+GOAL = Vec2d(1000, 300)
+
+def norm_pos(pos):
+    assert isinstance(pos, Vec2d)
+    return Vec2d((pos.x-1000)/100, (pos.y-360)/100)
+
+def denorm_pos(pos):
+    assert isinstance(pos, Vec2d)
+    return Vec2d(pos.x*100 +1000, pos.y*100+360)
+
 
 class StaticEnvironment(object):
     def __init__(self, space, GOAL, sprites = None):
@@ -141,13 +158,18 @@ class RobotEnvironment(object):
                 rand_angle = 0.5*np_pi*(random_sample() - 0.5)
                 if idx is 0:
                     rand_angle *= 2
+                if idx is self.Arms.n - 1:
+                    rand_angle *= 0.5
+                if idx is self.Arms.n:
+                    raise ValueError("Wrong init")
                 length = self.Arms.lengths[idx]
                 len_x += length*cos(rand_angle)
                 len_y += length*sin(rand_angle)
                 self.Arms.pos[idx] = (length, rand_angle)
-            if len_x < self.GOAL.x - ORIGIN[0] and ( self.GOAL.x - ORIGIN[0] - len_x) < 100 and abs(len_y + ORIGIN[1] - self.GOAL.y) < 100:
+            if (50 < ( self.GOAL.x - ORIGIN[0] - len_x) < 250 and 
+                 abs(len_y + ORIGIN[1] - self.GOAL.y) < 100):
                 got = True
-                if iterator > 500:
+                if iterator > 1000:
                     print(f"Got at {iterator}")
                     raise ArithmeticError("Cannot get an environment like that, change the origin")
             else:
@@ -316,23 +338,19 @@ class RobotEnvironment(object):
         """Get obs, currently showing tuples for each body:
             [0] Vec2d POSITION
             [1] Scalar VELOCITY (mid-center of body arms)
-            [2] Scalar ANGLE (Of each body in radians)
+            [2,3] Scalar cos, sin of ANGLE
         """
 
         peg = self.get_peg_tip()
         body = self.bodies[-1]
         true_angle = body.angle
         assert body.id is 'peg'
-        # peg_tip = self.get_peg_tip()
-        # oscillations = peg.angle//np.pi
-        # remainder = peg.angle - oscillations*np.pi
 
         # Meta RL obs
-        self.obs = [(peg.x - ORIGIN[0])/WINDOW_X, (peg.y - ORIGIN[1])/WINDOW_Y, np.cos(true_angle), np.sin(true_angle)]
-
+        normed_peg = norm_pos(peg)
+        self.obs = [normed_peg.x, normed_peg.y, np.cos(true_angle), np.sin(true_angle)]
         # RL algorithm obs
         # self.obs = [self.GOAL.x - peg.x, self.GOAL.y - peg.y, np.cos(true_angle), np.sin(true_angle)]
-        # self.obs = [(peg.x - 1000), (peg.y - 360)]
         return np.array(self.obs)
 
 class Frontend(pyglet.window.Window):
@@ -518,8 +536,10 @@ class Frontend(pyglet.window.Window):
 
     def on_key_release(self, symbol, modifiers):
         for body in self.space.bodies:
-            body.velocity *= 0.25*Vec2d(1,1)
-            body.angular_velocity *= 0.5
+            continue
+            if body.id == 'peg':
+                body.velocity *= 0.1*Vec2d(1,1)
+                body.angular_velocity *= 0.1
 
     def on_key_press(self, symbol, modifiers):
 
@@ -542,19 +562,19 @@ class Frontend(pyglet.window.Window):
             action = np.random.sample(3)*2-1
             self.robo.action_buffered = self.robo.denorm_action(action)
 
-        v = 0.2
+        v = np.pi/64
         if symbol == pyglet.window.key.Q:
-            bodies[-1].angular_velocity += v
+            bodies[-1].angular_velocity = v
         if symbol == pyglet.window.key.A:
-            bodies[-1].angular_velocity -= v
+            bodies[-1].angular_velocity = v
         if symbol == pyglet.window.key.W:
-            bodies[-2].angular_velocity += v
+            bodies[-2].angular_velocity = v
         if symbol == pyglet.window.key.S:
-            bodies[-2].angular_velocity -= v
+            bodies[-2].angular_velocity = v
         if symbol == pyglet.window.key.E:
-            bodies[-1].angular_velocity += v
+            bodies[-1].angular_velocity = v
         if symbol == pyglet.window.key.D:
-            bodies[-1].angular_velocity -= v
+            bodies[-1].angular_velocity = v
 
         c = 10
         if symbol == pyglet.window.key.UP:

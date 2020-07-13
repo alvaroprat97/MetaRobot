@@ -46,18 +46,29 @@ class InPlacePathSampler(object):
         paths = []
         n_steps_total = 0
         n_trajs = 0
+
         while n_steps_total < max_samples and n_trajs < max_trajs:
+            # if iter_counter is not None:
+            #     iter_counter += n_steps_total
             # Rollout function is actually the collector
-            iter_counter= iter_counter + n_steps_total if isinstance(iter_counter, int) else None
-            path = rollout(
-                        self.env, 
-                        policy, 
-                        max_path_length=self.max_path_length, 
-                        accum_context=accum_context, 
-                        writer = writer, 
-                        iter_counter=iter_counter
-                        )
-            # save the latent context that generated this trajectory
+            if isinstance(iter_counter, int) and isinstance(n_steps_total, int):
+                path = rollout(
+                            self.env, 
+                            policy, 
+                            max_path_length=self.max_path_length, 
+                            accum_context=accum_context, 
+                            writer = writer, 
+                            iter_counter=iter_counter + n_steps_total,
+                            )
+            else:
+                path = rollout(
+                            self.env, 
+                            policy, 
+                            max_path_length=self.max_path_length, 
+                            accum_context=accum_context, 
+                            writer = writer, 
+                            )
+            # save the latent space Z that generated this trajectory
             path['context'] = policy.z.detach().cpu().numpy()
             paths.append(path)
             n_steps_total += len(path['observations'])
