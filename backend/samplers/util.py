@@ -1,5 +1,6 @@
 import numpy as np
 from tensorboardX import SummaryWriter
+import torch
 
 def rollout(env, agent, 
             max_path_length=np.inf, 
@@ -8,7 +9,9 @@ def rollout(env, agent,
             save_frames=False, 
             iter_counter = 0,
             writer = None,
-            sparse_rewards = False
+            sparse_rewards = False,
+            m_i_rewards =  False,
+            m_i_params = None,
             ):
     """
     The following value for the following keys will be a 2D array, with the
@@ -43,18 +46,54 @@ def rollout(env, agent,
     path_length = 0
     path_reward = 0
 
+    if sparse_rewards and m_i_rewards:
+        raise ValueError("Cannot operate with sparse and mutual information rewards, choose one")
+    if m_i_rewards is True or m_i_params is not None:
+        raise NotImplementedError("Unstable use of rewards and encoder")
+
+    # context = m_i_params['context']
+    # gamma = m_i_params['gamma']
+    # q_funcs = m_i_params['q_targets']
+    # v_func = m_i_params['v_target']
+    # use_next_obs_in_context = m_i_params['use_n_o']
+
     while path_length < max_path_length:
         a, agent_info = agent.get_action(o)
         next_o, r, d, env_info = env.step(a)
+        x_i = [o, a, r, next_o, d, env_info]
+
+        # Mutual information Collection (at collection, this becomes unstable)
+        # if m_i_rewards:
+        #     o_ = torch.FloatTensor([o])
+        #     a_ = torch.FloatTensor([a])
+        #     next_o_ = torch.FloatTensor([next_o])
+        #     r_ = torch.FloatTensor([r]).unsqueeze(0)
+        #     z_old = agent.z
+        #     if use_next_obs_in_context:
+        #         data = torch.cat([o_, a_, r_, next_o_], dim=1)
+        #     else:
+        #         data = torch.cat([o_, a_, r_], dim=1)
+        #     if context is None:
+        #         extended_context = data
+        #     else:
+        #         extended_context = torch.cat([context, data], dim=1)
+        #     agent.infer_posterior(extended_context.unsqueeze(0))
+        #     z_new = agent.z
+        #     with torch.no_grad():
+        #         target = r_ + gamma * v_func(next_o_, z_old)
+        #         basis = torch.min(q_funcs[0](o_, a_, z_new), q_funcs[1](o_, a_, z_new))
+        #         r_mi = torch.abs(basis - target)
+
         if sparse_rewards:
             if r<1:
                 r = 0
+
         # update the agent's current context
         if animated:
             env.set_schedule(o, a)
             env.render()
         if accum_context:
-            agent.update_context([o, a, r, next_o, d, env_info])
+            agent.update_context(x_i)
         observations.append(o)
         rewards.append(r)
         terminals.append(d)

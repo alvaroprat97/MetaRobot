@@ -102,19 +102,51 @@ def experiment(variant):
         latent_dim=latent_dim,
         action_dim=action_dim,
     )
+    xplor_qf1 = xplor_qf2 = xplor_vf = xplor_policy = None
+    # Set optional xploration decouplings
+    if variant['decoupled_config']['use']:
+        xplor_qf1 = FlattenMlp(
+            hidden_sizes=[net_size, net_size, net_size],
+            input_size=obs_dim + action_dim + latent_dim,
+            output_size=1,
+        )
+        xplor_qf2 = FlattenMlp(
+            hidden_sizes=[net_size, net_size, net_size],
+            input_size=obs_dim + action_dim + latent_dim,
+            output_size=1,
+        )
+        xplor_vf = FlattenMlp(
+            hidden_sizes=[net_size, net_size, net_size],
+            input_size=obs_dim + latent_dim,
+            output_size=1,
+        )
+        xplor_policy = TanhGaussianPolicy(
+            hidden_sizes=[net_size, net_size, net_size],
+            obs_dim=obs_dim + latent_dim,
+            latent_dim=latent_dim,
+            action_dim=action_dim,
+        )
+    print("TanhGaussianLSTMPolicy() not implemented yet... \n")
+
+    xplor_agent = None
+    if variant['decoupled_config']['use']:
+        xplor_agent = PEARLAgent(
+            latent_dim,
+            policy,
+            **variant['algo_params']
+        )
     agent = PEARLAgent(
         latent_dim,
-        context_encoder,
-        policy,
-        aux_decoder = aux_decoder,
-        aux_params = variant['aux_params'],
+        policy = policy,
         **variant['algo_params']
     )
+
+    nets = [agent, qf1, qf2, vf] if variant['decoupled_config']['use'] is False else [agent, xplor_agent, qf1, qf2, vf]
     algorithm = PEARLSoftActorCritic(
         env=env,
         train_tasks=list(tasks[:variant['n_train_tasks']]),
         eval_tasks=list(tasks[-variant['n_eval_tasks']:]),
-        nets=[agent, qf1, qf2, vf],
+        nets=nets,
         latent_dim=latent_dim,
         **variant['algo_params']
     )

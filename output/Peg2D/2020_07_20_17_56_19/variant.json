@@ -1,0 +1,98 @@
+{
+  "GNN_encoder": true,
+  "LatentGNN": {
+    "hidden_dict": {
+      "in_": [
+        64,
+        64
+      ],
+      "out_": [
+        32,
+        32
+      ]
+    },
+    "latent_dims": [
+      6,
+      6
+    ],
+    "num_kernels": 2
+  },
+  "adapt_params": {
+    "context_window_steps": 20,
+    "continuous": false
+  },
+  "algo_params": {
+    "aux_lr": 0.0003,
+    "batch_size": 128,
+    "context_lr": 0.0003,
+    "discount": 0.99,
+    "dump_eval_paths": false,
+    "embedding_batch_size": 64,
+    "embedding_mini_batch_size": 64,
+    "kl_lambda": 0.1,
+    "max_path_length": 50,
+    "meta_batch": 12,
+    "num_evals": 1,
+    "num_exp_traj_eval": 3,
+    "num_extra_rl_steps_posterior": 300,
+    "num_initial_steps": 200,
+    "num_iterations": 500,
+    "num_steps_per_eval": 250,
+    "num_steps_posterior": 0,
+    "num_steps_prior": 200,
+    "num_tasks_sample": 8,
+    "num_train_steps_per_itr": 1000,
+    "policy_lr": 0.0003,
+    "qf_lr": 0.0003,
+    "recurrent": false,
+    "reward_scale": 10.0,
+    "soft_target_tau": 0.005,
+    "sparse_rewards": false,
+    "update_post_train": 1,
+    "use_information_bottleneck": true,
+    "use_next_obs_in_context": true,
+    "vf_lr": 0.0003
+  },
+  "aux_loss": true,
+  "aux_params": {
+    "aux_std": null,
+    "belief_dim": 2,
+    "beta": 10,
+    "decay": false,
+    "fixed_std": false,
+    "hidden": [
+      16,
+      8
+    ],
+    "use": true
+  },
+  "decoupled_config": {
+    "actor": {
+      "recurrent": false
+    },
+    "use": false,
+    "xplor": {
+      "recurrent": false
+    }
+  },
+  "env_name": "Peg2D",
+  "env_params": {
+    "n_tasks": 50,
+    "randomize_tasks": false
+  },
+  "latent_size": 6,
+  "modality": "train",
+  "n_eval_tasks": 10,
+  "n_train_tasks": 40,
+  "net_size": 128,
+  "path_to_weights": null,
+  "test_idx": 0,
+  "util_params": {
+    "base_log_dir": "/content/drive/My Drive/meta_robot/output",
+    "debug": false,
+    "docker": false,
+    "gpu_id": 0,
+    "run_dir": "/content/drive/My Drive/meta_robot/",
+    "use_gpu": true
+  }
+}

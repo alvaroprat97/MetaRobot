@@ -20,11 +20,11 @@ default_config = dict(
     algo_params=dict(
         meta_batch=16, # number of tasks to average the gradient across
         num_iterations=500, # number of data sampling / training iterates (epochs = iterations)
-        num_initial_steps=250, # number of transitions collected per task before training
+        num_initial_steps=200, # number of transitions collected per task before training
         num_tasks_sample=8, # number of randomly sampled tasks to collect data for each iteration
-        num_steps_prior=300, # number of transitions to collect per task with z ~ prior
+        num_steps_prior=200, # number of transitions to collect per task with z ~ prior
         num_steps_posterior=0, # number of transitions to collect per task with z ~ posterior
-        num_extra_rl_steps_posterior=400, # number of additional transitions to collect per task with z ~ posterior that are only used to train the policy and NOT the encoder
+        num_extra_rl_steps_posterior=300, # number of additional transitions to collect per task with z ~ posterior that are only used to train the policy and NOT the encoder
         num_train_steps_per_itr=1000, # number of meta-gradient steps taken per iteration
         num_evals=1, # number of independent evals
         num_steps_per_eval= 250,  # nuumber of transitions to eval on
@@ -39,15 +39,15 @@ default_config = dict(
         vf_lr=3E-4,
         aux_lr = 3E-4,
         context_lr=3E-4,
-        reward_scale=5.0, # scale rewards before constructing Bellman update, effectively controls weight on the entropy of the policy
+        reward_scale=10.0, # scale rewards before constructing Bellman update, effectively controls weight on the entropy of the policy
         sparse_rewards=False, # whether to sparsify rewards as determined in env
         kl_lambda=.1, # weight on KL divergence term in encoder loss
         use_information_bottleneck=True, # False makes latent context deterministic
         use_next_obs_in_context=True, # use next obs if it is useful in distinguishing tasks
         update_post_train=1, # how often to resample the context when collecting data during training (in trajectories)
-        num_exp_traj_eval=1, # how many exploration trajs to collect before beginning posterior sampling at test time
+        num_exp_traj_eval=3, # how many exploration trajs to collect before beginning posterior sampling at test time
         recurrent=False, # recurrent or permutation-invariant encoder
-        dump_eval_paths=True, # whether to save evaluation trajectories
+        dump_eval_paths=False, # whether to save evaluation trajectories
     ),
     util_params=dict(
         base_log_dir= "/content/drive/My Drive/meta_robot/output",
@@ -62,11 +62,11 @@ default_config = dict(
         context_window_steps = 20, # Window to adapt context online
     ),
     LatentGNN = dict(
-        latent_dims = [8, 8],
+        latent_dims = [6, 6],
         num_kernels = 2,
         hidden_dict = dict(
-            in_ = [128, 128],
-            out_ = [64, 64]
+            in_ = [64, 64],
+            out_ = [32, 32]
         ),
     ),
     aux_params = dict(
@@ -79,7 +79,7 @@ default_config = dict(
         decay = False, # Option to decay the loss over time, allowing "optimising for what we want, reducing constraints"
     ),
     decoupled_config = dict(
-        use = True,
+        use = False,
         xplor = dict(
             recurrent = False,
         ),

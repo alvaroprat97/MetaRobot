@@ -1,0 +1,198 @@
+2020-07-19 19:19:57.974701 UTC | [2020_07_19_19_18_40] Iteration #0 | Variant:
+2020-07-19 19:19:57.976981 UTC | [2020_07_19_19_18_40] Iteration #0 | {
+  "env_name": "Peg2D",
+  "n_train_tasks": 40,
+  "n_eval_tasks": 10,
+  "modality": "train",
+  "test_idx": 0,
+  "GNN_encoder": true,
+  "aux_loss": true,
+  "latent_size": 6,
+  "net_size": 128,
+  "path_to_weights": null,
+  "env_params": {
+    "n_tasks": 50,
+    "randomize_tasks": false
+  },
+  "algo_params": {
+    "meta_batch": 16,
+    "num_iterations": 500,
+    "num_initial_steps": 250,
+    "num_tasks_sample": 8,
+    "num_steps_prior": 300,
+    "num_steps_posterior": 0,
+    "num_extra_rl_steps_posterior": 400,
+    "num_train_steps_per_itr": 1000,
+    "num_evals": 1,
+    "num_steps_per_eval": 250,
+    "batch_size": 256,
+    "embedding_batch_size": 64,
+    "embedding_mini_batch_size": 64,
+    "max_path_length": 50,
+    "discount": 0.99,
+    "soft_target_tau": 0.005,
+    "policy_lr": 0.0003,
+    "qf_lr": 0.0003,
+    "vf_lr": 0.0003,
+    "aux_lr": 0.0003,
+    "context_lr": 0.0003,
+    "reward_scale": 10.0,
+    "sparse_rewards": false,
+    "kl_lambda": 0.1,
+    "use_information_bottleneck": true,
+    "use_next_obs_in_context": true,
+    "update_post_train": 1,
+    "num_exp_traj_eval": 3,
+    "recurrent": false,
+    "dump_eval_paths": false
+  },
+  "util_params": {
+    "base_log_dir": "/content/drive/My Drive/meta_robot/output",
+    "run_dir": "/content/drive/My Drive/meta_robot/",
+    "use_gpu": true,
+    "gpu_id": 0,
+    "debug": false,
+    "docker": false
+  },
+  "adapt_params": {
+    "continuous": false,
+    "context_window_steps": 20
+  },
+  "LatentGNN": {
+    "latent_dims": [
+      6,
+      6
+    ],
+    "num_kernels": 2,
+    "hidden_dict": {
+      "in_": [
+        84,
+        84
+      ],
+      "out_": [
+        48,
+        48
+      ]
+    }
+  },
+  "aux_params": {
+    "belief_dim": 2,
+    "hidden": [
+      16,
+      8
+    ],
+    "use": true,
+    "fixed_std": false,
+    "aux_std": null,
+    "beta": 10,
+    "decay": false
+  },
+  "decoupled_config": {
+    "use": false,
+    "xplor": {
+      "recurrent": false
+    },
+    "actor": {
+      "recurrent": false
+    }
+  }
+}
+2020-07-19 19:20:59.557295 UTC | [2020_07_19_19_18_40] Iteration #0 | [2020_07_19_19_19_57] Variant:
+2020-07-19 19:20:59.559347 UTC | [2020_07_19_19_18_40] Iteration #0 | [2020_07_19_19_19_57] {
+  "env_name": "Peg2D",
+  "n_train_tasks": 40,
+  "n_eval_tasks": 10,
+  "modality": "train",
+  "test_idx": 0,
+  "GNN_encoder": true,
+  "aux_loss": true,
+  "latent_size": 6,
+  "net_size": 128,
+  "path_to_weights": null,
+  "env_params": {
+    "n_tasks": 50,
+    "randomize_tasks": false
+  },
+  "algo_params": {
+    "meta_batch": 16,
+    "num_iterations": 500,
+    "num_initial_steps": 250,
+    "num_tasks_sample": 8,
+    "num_steps_prior": 300,
+    "num_steps_posterior": 0,
+    "num_extra_rl_steps_posterior": 400,
+    "num_train_steps_per_itr": 1000,
+    "num_evals": 1,
+    "num_steps_per_eval": 250,
+    "batch_size": 256,
+    "embedding_batch_size": 64,
+    "embedding_mini_batch_size": 64,
+    "max_path_length": 50,
+    "discount": 0.99,
+    "soft_target_tau": 0.005,
+    "policy_lr": 0.0003,
+    "qf_lr": 0.0003,
+    "vf_lr": 0.0003,
+    "aux_lr": 0.0003,
+    "context_lr": 0.0003,
+    "reward_scale": 10.0,
+    "sparse_rewards": false,
+    "kl_lambda": 0.1,
+    "use_information_bottleneck": true,
+    "use_next_obs_in_context": true,
+    "update_post_train": 1,
+    "num_exp_traj_eval": 3,
+    "recurrent": false,
+    "dump_eval_paths": false
+  },
+  "util_params": {
+    "base_log_dir": "/content/drive/My Drive/meta_robot/output",
+    "run_dir": "/content/drive/My Drive/meta_robot/",
+    "use_gpu": true,
+    "gpu_id": 0,
+    "debug": false,
+    "docker": false
+  },
+  "adapt_params": {
+    "continuous": false,
+    "context_window_steps": 20
+  },
+  "LatentGNN": {
+    "latent_dims": [
+      6,
+      6
+    ],
+    "num_kernels": 2,
+    "hidden_dict": {
+      "in_": [
+        84,
+        84
+      ],
+      "out_": [
+        48,
+        48
+      ]
+    }
+  },
+  "aux_params": {
+    "belief_dim": 2,
+    "hidden": [
+      16,
+      8
+    ],
+    "use": true,
+    "fixed_std": false,
+    "aux_std": null,
+    "beta": 10,
+    "decay": false
+  },
+  "decoupled_config": {
+    "use": false,
+    "xplor": {
+      "recurrent": false
+    },
+    "actor": {
+      "recurrent": false
+    }
+  }
+}

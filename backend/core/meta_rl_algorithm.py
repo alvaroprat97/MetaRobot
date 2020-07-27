@@ -24,7 +24,6 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
             agent,
             train_tasks,
             eval_tasks,
-            xplor_agent = None,
             meta_batch=64,
             num_iterations=100,
             num_train_steps_per_itr=1000,
@@ -40,7 +39,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
             embedding_mini_batch_size=1024,
             max_path_length=1000,
             discount=0.99,
-            replay_buffer_size=1000000,
+            replay_buffer_size=200000,
             reward_scale=1,
             num_exp_traj_eval=1,
             update_post_train=1,
@@ -63,7 +62,6 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         """
         self.env = env
         self.agent = agent
-        self.xplor_agent = xplor_agent # Can potentially use a different policy purely for exploration rather than also solving tasks, currently not being used
         self.train_tasks = train_tasks
         self.eval_tasks = eval_tasks
         self.meta_batch = meta_batch
@@ -99,33 +97,27 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         self.write = False
         writer = self.writer
         self.write = True if isinstance(writer, SummaryWriter) else False
-
+        self.decoupled = True if isinstance(self.agent, dict) else False
+        
+        # Actor config
+        agent_actor = agent if not self.decoupled else agent['actor']
         self.sampler = InPlacePathSampler(
             env=env,
-            policy=agent,
+            policy=agent_actor,
             max_path_length=self.max_path_length,
         )
-
-        # separate replay buffers for
-        # - training RL update
-        # - training encoder update
         self.replay_buffer = MultiTaskReplayBuffer(
                 self.replay_buffer_size,
                 env,
                 self.train_tasks,
             )
-        self.enc_replay_buffer = MultiTaskReplayBuffer(
-                self.replay_buffer_size,
-                env,
-                self.train_tasks,
-        )
 
         # Initialise decoupled exploration policy and exploration buffer
         self.xplor_sampler, self.xplor_replay_buffer = None, None
-        if self.xplor_agent is not None:
+        if self.decoupled:
             self.xplor_sampler = InPlacePathSampler(
                                         env=env,
-                                        policy=xplor_agent,
+                                        policy=agent['xplor'],
                                         max_path_length=self.max_path_length,
                                         )
             self.xplor_replay_buffer = MultiTaskReplayBuffer(
@@ -133,6 +125,11 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                                         env,
                                         self.train_tasks,
                                         )
+        self.enc_replay_buffer = MultiTaskReplayBuffer(
+                self.replay_buffer_size,
+                env,
+                self.train_tasks,
+        )        
 
         self._n_env_steps_total = 0
         self._n_train_steps_total = 0
@@ -143,6 +140,8 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         self._old_table_keys = None
         self._current_path_builder = PathBuilder()
         self._exploration_paths = []
+        self.m_i_rewards = True if self.decoupled else False
+        print(f"Acting on mutual information: {self.m_i_rewards}")
 
     def make_exploration_policy(self, policy):
          return policy
@@ -186,12 +185,24 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                 for idx in self.train_tasks:
                     self.task_idx = idx
                     self.env.set_task_idx(idx)
+                    # Collect on actor buffer B
+                    # print("Encoder buffer only contains transitions from explorer in init... CHECK ENCODER IS SHARED")
                     self.env.reset_task(idx)
                     self.collect_data(num_samples = self.num_initial_steps, 
                                     resample_z_rate = 1, 
                                     update_posterior_rate =  np.inf, 
-                                    add_to_enc_buffer=True
+                                    add_to_enc_buffer=True,
+                                    actor = True,
                                     )
+                    if self.decoupled:                
+                        # Collect on explorer buffer X
+                        self.env.reset_task(idx)
+                        self.collect_data(num_samples = self.num_initial_steps, 
+                                        resample_z_rate = 1, 
+                                        update_posterior_rate =  np.inf, 
+                                        add_to_enc_buffer=True,
+                                        actor = False,
+                                        )                    
 
             # Sample data from all training tasks.
             for i in range(self.num_tasks_sample):
@@ -201,20 +212,28 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                 self.env.set_task_idx(idx)
                 # Reset the task environment & buffers for the randomly selected task
                 self.env.reset_task(idx)
-                # Clear the encoder 
+                # Clear the encoder for task idx
                 self.enc_replay_buffer.task_buffers[idx].clear()
 
-            # are THESE trajectories are used for training here and sampling the contexts??
-            # YES, for the encoder replay buffer
-                # collect some trajectories with z ~ prior. We do not update posterior of z.
+                # collect some trajectories with z ~ prior. We do not update posterior of z. 
+                # This is what the encoder buffer contains
                 if self.num_steps_prior > 0:
-                    self.collect_data(self.num_steps_prior, 1, np.inf)
+                    # print("Encoder buffer contains exploratory transitions only in collection")
+                    if self.decoupled:
+                        self.collect_data(self.num_steps_prior, 1, np.inf, add_to_enc_buffer = False, actor = True)
+                        self.collect_data(self.num_steps_prior, 1, np.inf, add_to_enc_buffer = True, actor = False)
+                    else:
+                        self.collect_data(self.num_steps_prior, 1, np.inf, add_to_enc_buffer = True, actor = True)
                 # collect some trajectories with z ~ posterior. We update the posterior of z. 
                 if self.num_steps_posterior > 0:
                     self.collect_data(self.num_steps_posterior, 1, self.update_post_train)
-                # even if encoder is trained only on samples from the prior, the policy needs to learn to handle z ~ posterior
+                # even if encoder is trained only on samples from the prior, the policy needs to learn to handle z ~ posterior 
+                # not used for encoder training
                 if self.num_extra_rl_steps_posterior > 0:
-                    self.collect_data(self.num_extra_rl_steps_posterior, 1, self.update_post_train, add_to_enc_buffer=False)
+                    if self.decoupled:
+                        self.collect_data(self.num_extra_rl_steps_posterior, 1, self.update_post_train, add_to_enc_buffer=False, actor = False)
+                    # Distributional shift fix: using exploratory prior z, save a posteriori transitions to the encoder too
+                    self.collect_data(self.num_extra_rl_steps_posterior, 1, self.update_post_train, add_to_enc_buffer=False, actor = True)
 
             # Sample train tasks and compute gradient updates on parameters.
             for train_step in range(self.num_train_steps_per_itr):
@@ -228,7 +247,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
 
             self.training_mode(False)
 
-            # eval
+            # eval on collected ctxt
             self._try_to_eval(it_)
             gt.stamp('eval')
 
@@ -240,7 +259,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         """
         pass
 
-    def collect_data(self, num_samples, resample_z_rate, update_posterior_rate, add_to_enc_buffer=True):
+    def collect_data(self, num_samples, resample_z_rate, update_posterior_rate, add_to_enc_buffer=True, actor = True):
         '''
         get trajectories from current env in batch mode with given policy
         collect complete trajectories until the number of collected transitions >= num_samples
@@ -253,27 +272,61 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         '''
         # clar z to start from the prior (clean prior)
         # TODO re-think how to modify this via demos
-        self.agent.clear_z()
+        if self.decoupled:
+            if actor:
+                self.agent['actor'].clear_z()
+            else:
+                self.agent['xplor'].clear_z()
+        else:
+            self.agent.clear_z()
 
         num_transitions = 0
+        context = None
+        m_i_params = None
         while num_transitions < num_samples:
-
+        
+            # if self.decoupled:
+            #     m_i_params = dict(
+            #         q_targets = [self.qf1, self.qf2],
+            #         v_target = self.target_vf,
+            #         gamma = self.discount,
+            #         context = context,
+            #         use_n_o = self.use_next_obs_in_context
+            #     )
+            # m_i_rewards = True if self.decoupled and not actor else False
+            
             # Obtain paths for the task on self.task_idx
-            paths, n_samples = self.sampler.obtain_samples(deterministic = False,
+            if self.decoupled:
+                sampler = self.sampler if actor else self.xplor_sampler
+            else:
+                sampler = self.sampler
+            paths, n_samples = sampler.obtain_samples(deterministic = False,
                                                             accum_context = False,
                                                             max_samples=num_samples - num_transitions,
                                                             max_trajs=update_posterior_rate,
                                                             resample=resample_z_rate,
                                                             writer = self.writer,
-                                                            iter_counter = self._n_env_steps_total + num_transitions
+                                                            iter_counter = self._n_env_steps_total + num_transitions,
+                                                            # m_i_rewards = m_i_rewards,
+                                                            # m_i_params = m_i_params, 
                                                             )
             num_transitions += n_samples
-            self.replay_buffer.add_paths(self.task_idx, paths)
+            if actor or not self.decoupled:
+                self.replay_buffer.add_paths(self.task_idx, paths)
+            else: 
+                self.xplor_replay_buffer.add_paths(self.task_idx, paths)
             if add_to_enc_buffer:
                 self.enc_replay_buffer.add_paths(self.task_idx, paths)
             if update_posterior_rate != np.inf:
                 context = self.sample_context(self.task_idx)
-                self.agent.infer_posterior(context)
+                if not self.decoupled:
+                    self.agent.infer_posterior(context)
+                else:
+                    if actor:
+                        self.agent['actor'].infer_posterior(context)
+                    else:
+                        self.agent['xplor'].infer_posterior(context)
+
         self._n_env_steps_total += num_transitions
         gt.stamp('sample')
 
@@ -364,9 +417,10 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
 
     ##### Snapshotting utils #####
     def get_epoch_snapshot(self, epoch):
+        agent = self.agent if not self.decoupled else self.agent['xplor']
         data_to_save = dict(
             epoch=epoch,
-            exploration_policy=self.xplor_agent,
+            exploration_policy=agent,
         )
         if self.save_environment:
             data_to_save['env'] = self.training_env
@@ -397,18 +451,42 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         self.env.set_task_idx(idx)
         # Reset the task environment & buffers for the randomly selected task
         self.env.reset_task(idx)
-        self.agent.clear_z()
+
+        # Clear z and all contexts
+        if not self.decoupled:
+            self.agent.clear_z()
+        else:
+            for agent in self.agent.values():
+                agent.clear_z()
 
         paths = []
         num_transitions = 0
         num_trajs = 0
+
+        # Initially activate the explorer agent
+        xplor = True if self.decoupled else False
+        # print("\n EVALUATION ")
         while num_transitions < self.num_steps_per_eval:
-            path, num = self.sampler.obtain_samples(deterministic=self.eval_deterministic, max_samples=self.num_steps_per_eval - num_transitions, max_trajs=1, accum_context=True)
+            
+            sampler = self.xplor_sampler if xplor else self.sampler
+            path, num = sampler.obtain_samples(deterministic=self.eval_deterministic, max_samples=self.num_steps_per_eval - num_transitions, 
+                                                    max_trajs=1, accum_context=True)
             paths += path
             num_transitions += num
             num_trajs += 1
-            if num_trajs >= self.num_exp_traj_eval:
-                self.agent.infer_posterior(self.agent.context)
+
+            if self.decoupled:
+                if num_trajs >= self.num_exp_traj_eval:
+                    xplor = False
+                    # print(f"Exploiting... {num_trajs}")
+                    self.agent['actor'].infer_posterior(self.agent['xplor'].context)
+                else:
+                    # print(f"Exploring... {num_trajs}")
+                    xplor = True
+                    self.agent['xplor'].infer_posterior(self.agent['xplor'].context)
+            else:
+                if num_trajs >= self.num_exp_traj_eval:
+                    self.agent.infer_posterior(self.agent.context)
 
         if self.sparse_rewards:
             for p in paths:
@@ -451,8 +529,15 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         if self.dump_eval_paths:
             # 100 arbitrarily chosen for visualizations of point_robot trajectories
             # just want stochasticity of z, not the policy
-            self.agent.clear_z()
-            prior_paths, _ = self.sampler.obtain_samples(deterministic=self.eval_deterministic, max_samples=self.max_path_length * 20,
+            if self.decoupled:
+                self.agent['xplor'].clear_z()
+                self.agent['actor'].clear_z()
+            else:
+                self.agent.clear_z() 
+
+            print("Saving prior trajectories from explorer")
+            sampler = self.sampler if not self.decoupled else self.xplor_sampler
+            prior_paths, _ = sampler.obtain_samples(deterministic=self.eval_deterministic, max_samples=self.max_path_length * 20,
                                                         accum_context=False,
                                                         resample=1)
             logger.save_extra_data(prior_paths, path='eval_trajectories/prior-epoch{}'.format(epoch))
@@ -461,6 +546,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         # eval on a subset of train tasks for speed
         indices = np.random.choice(self.train_tasks, len(self.eval_tasks))
         eval_util.dprint('evaluating on {} train tasks'.format(len(indices)))
+
         ### eval train tasks with posterior sampled from the training replay buffer
         train_returns = []
         for idx in indices:
@@ -468,12 +554,26 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
             self.env.set_task_idx(idx)
             # Reset the task environment & buffers for the randomly selected task
             self.env.reset_task(idx)
-
             paths = []
-            for _ in range(self.num_steps_per_eval // self.max_path_length):
+
+            xplor = True if self.decoupled else False
+            for num_trajs in range(self.num_steps_per_eval // self.max_path_length):
                 context = self.sample_context(idx)
-                self.agent.infer_posterior(context)
-                p, _ = self.sampler.obtain_samples(deterministic=self.eval_deterministic, max_samples=self.max_path_length,
+                if self.decoupled:
+                    self.agent['actor'].infer_posterior(context)
+                    xplor = False
+                    # if num_trajs >= self.num_exp_traj_eval:
+                    #     xplor = False
+                    #     # print(f"Exploiting... {num_trajs}")
+                    #     self.agent['actor'].infer_posterior(context)
+                    # else:
+                    #     # print(f"Exploring... {num_trajs}")
+                    #     xplor = True
+                    #     self.agent['xplor'].infer_posterior(context)
+                else:
+                    self.agent.infer_posterior(context)
+                sampler = self.xplor_sampler if xplor else self.sampler
+                p, _ = sampler.obtain_samples(deterministic=self.eval_deterministic, max_samples=self.max_path_length,
                                                         accum_context=False,
                                                         max_trajs=1,
                                                         resample=np.inf)
@@ -498,7 +598,11 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         eval_util.dprint(test_online_returns)
 
         # save the final posterior
-        self.agent.log_diagnostics(self.eval_statistics)
+        if self.decoupled:
+            self.agent['actor'].log_diagnostics(self.eval_statistics)
+            self.agent['xplor'].log_diagnostics(self.eval_statistics)
+        else:
+            self.agent.log_diagnostics(self.eval_statistics)
 
         if hasattr(self.env, "log_diagnostics"):
             self.env.log_diagnostics(paths, prefix=None)
@@ -536,6 +640,14 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
     def _do_training(self):
         """
         Perform some update, e.g. perform one gradient step.
+        :return:
+        """
+        pass
+
+    @abc.abstractmethod
+    def sample_context(self, indices):
+        """
+        Sample context from encoder buffers
         :return:
         """
         pass

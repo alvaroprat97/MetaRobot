@@ -53,35 +53,38 @@ def _canonical_to_natural(mu, sigma_squared):
     n2 = -0.5 * 1 / sigma_squared
     return n1, n2
 
+class DecoupledAgent(object):
+    def __init__(self,
+                actor_agent,
+                xplor_agent,
+                context_encoder,
+                aux_decoder,
+                ):
+        super().__init__()
 
 class PEARLAgent(nn.Module):
 
     def __init__(self,
-                 latent_dim,
-                 context_encoder,
                  policy,
+                 latent_dim = None,
+                 context_encoder = None,
                  aux_decoder = None,
                  aux_params = {},
                  **kwargs
     ):
         super().__init__()
-        self.latent_dim = latent_dim
 
         self.context_encoder = context_encoder
         self.aux_decoder = aux_decoder
         self.policy = policy
+
+        self.set_encoder_params(aux_params, latent_dim)
 
         # self.policy.apply(weights_init)
         self.recurrent = kwargs['recurrent']
         self.use_ib = kwargs['use_information_bottleneck']
         self.sparse_rewards = kwargs['sparse_rewards']
         self.use_next_obs_in_context = kwargs['use_next_obs_in_context']
-
-        self.use_aux =  aux_params['use']
-        self.fixed_std = aux_params['fixed_std']
-        self.aux_std = aux_params['aux_std']
-        self.beta = aux_params['beta']
-        self.belief = None
 
         # initialize buffers for z dist and z
         # use buffers so latent context can be saved along with model weights
@@ -90,6 +93,18 @@ class PEARLAgent(nn.Module):
         self.register_buffer('z_vars', torch.zeros(1, latent_dim))
 
         self.clear_z()
+
+    def set_encoder(self, encoder, aux_decoder = None):
+        self.context_encoder = encoder
+        self.aux_decoder = aux_decoder
+
+    def set_encoder_params(self, aux_params, latent_dim, belief = None):
+        self.use_aux =  aux_params['use']
+        self.fixed_std = aux_params['fixed_std']
+        self.aux_std = aux_params['aux_std']
+        self.beta = aux_params['beta']
+        self.belief = belief
+        self.latent_dim = latent_dim
 
     def clear_z(self, num_tasks=1):
         '''
@@ -145,7 +160,9 @@ class PEARLAgent(nn.Module):
         return kl_div_sum
 
     def infer_posterior(self, context):
-        ''' compute q(z|c) as a function of input context and sample new z from it'''
+        ''' compute q(z|c) as a function of input context and sample new z from it
+            additional_trans: additional transition for mutual information
+        '''
         params = self.context_encoder(context)
         params = params.view(context.size(0), -1, self.context_encoder.output_size)
         # with probabilistic z, predict mean and variance of q(z | c)
@@ -160,7 +177,31 @@ class PEARLAgent(nn.Module):
             self.z_means = torch.mean(params, dim=1)
         self.sample_z()
 
-    def sample_z(self):
+    def _infer_posterior(self, context):
+        ''' compute q(z|c) as a function of input context and sample new z from it
+            just outputs, does not affect class variables
+        '''
+        params = self.context_encoder(context)
+        params = params.view(context.size(0), -1, self.context_encoder.output_size)
+        # with probabilistic z, predict mean and variance of q(z | c)
+        if self.use_ib:
+            mu = params[..., :self.latent_dim]
+            sigma_squared = F.softplus(params[..., self.latent_dim:])
+            z_params = [_product_of_gaussians(m, s) for m, s in zip(torch.unbind(mu), torch.unbind(sigma_squared))]  
+            z_means = torch.stack([p[0] for p in z_params])
+            z_vars = torch.stack([p[1] for p in z_params])
+        # sum rather than product of gaussians structure
+        else:
+            z_means = torch.mean(params, dim=1)
+        if self.use_ib:
+            posteriors = [torch.distributions.Normal(m, torch.sqrt(s)) for m, s in zip(torch.unbind(z_means), torch.unbind(z_vars))]
+            z = [d.rsample() for d in posteriors]
+            z = torch.stack(z)
+        else:
+            z = z_means
+        return z
+
+    def sample_z(self, tmp = False):
         if self.use_ib:
             posteriors = [torch.distributions.Normal(m, torch.sqrt(s)) for m, s in zip(torch.unbind(self.z_means), torch.unbind(self.z_vars))]
             z = [d.rsample() for d in posteriors]
@@ -228,9 +269,10 @@ class PEARLAgent(nn.Module):
 
     @property
     def networks(self):
-        if isinstance(self.aux_decoder, nn.Module):
+        if isinstance(self.aux_decoder, nn.Module) and isinstance(self.context_encoder, nn.Module):
             return [self.context_encoder, self.policy, self.aux_decoder]
         else:
-             return [self.context_encoder, self.policy]
-
-
+            if isinstance(self.aux_decoder, nn.Module):
+                return [self.policy, self.aux_decoder]
+            else:
+                return [self.policy]

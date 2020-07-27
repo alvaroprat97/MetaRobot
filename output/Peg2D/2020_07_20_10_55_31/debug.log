@@ -1,0 +1,145 @@
+----------------------------------  --------------
+Z mean train                           0.00770962
+Z variance train                       0.694974
+KL Divergence                          2.84691
+KL Loss                                0.284691
+QF Loss                               16.4516
+VF Loss                                4.1464
+Policy Loss                           -2.00306
+Aux Loss                              22.0937
+Q Predictions Mean                    -0.000116821
+Q Predictions Std                      0.000700171
+Q Predictions Max                      0.00148979
+Q Predictions Min                     -0.00145099
+V Predictions Mean                     0.000744839
+V Predictions Std                      0.000405282
+V Predictions Max                      0.00184195
+V Predictions Min                     -6.74846e-05
+Log Pis Mean                          -2.00866
+Log Pis Std                            0.37029
+Log Pis Max                           -0.841654
+Log Pis Min                           -2.96848
+Policy mu Mean                        -0.000766492
+Policy mu Std                          0.000674762
+Policy mu Max                          0.000425957
+Policy mu Min                         -0.00188059
+Policy log std Mean                   -0.00116159
+Policy log std Std                     0.00050983
+Policy log std Max                    -3.12176e-05
+Policy log std Min                    -0.00213463
+Z mean eval                            0.0348869
+Z variance eval                        0.842754
+AverageTrainReturn_all_train_tasks    -9.24951
+AverageReturn_all_train_tasks         -9.13149
+AverageReturn_all_test_tasks          -8.57323
+Number of train steps total         1000
+Number of env steps total           2700
+Number of rollouts total               0
+Train Time (s)                       103.108
+(Previous) Eval Time (s)               0
+Sample Time (s)                        5.2963
+Epoch Time (s)                       108.405
+Total Train Time (s)                 123.678
+Epoch                                  0
+----------------------------------  --------------
+2020-07-20 10:57:35.388905 UTC | [2020_07_20_10_55_31] Iteration #0 | Epoch Duration: 123.73876142501831
+2020-07-20 10:57:35.389943 UTC | [2020_07_20_10_55_31] Iteration #0 | Started Training: False
+2020-07-20 10:57:59.128587 UTC | [2020_07_20_10_55_31] Iteration #1 | Variant:
+2020-07-20 10:57:59.131972 UTC | [2020_07_20_10_55_31] Iteration #1 | {
+  "env_name": "Peg2D",
+  "n_train_tasks": 40,
+  "n_eval_tasks": 10,
+  "modality": "train",
+  "test_idx": 0,
+  "GNN_encoder": true,
+  "aux_loss": true,
+  "latent_size": 6,
+  "net_size": 128,
+  "path_to_weights": null,
+  "env_params": {
+    "n_tasks": 50,
+    "randomize_tasks": false
+  },
+  "algo_params": {
+    "meta_batch": 16,
+    "num_iterations": 500,
+    "num_initial_steps": 50,
+    "num_tasks_sample": 1,
+    "num_steps_prior": 300,
+    "num_steps_posterior": 0,
+    "num_extra_rl_steps_posterior": 400,
+    "num_train_steps_per_itr": 1000,
+    "num_evals": 1,
+    "num_steps_per_eval": 250,
+    "batch_size": 256,
+    "embedding_batch_size": 64,
+    "embedding_mini_batch_size": 64,
+    "max_path_length": 50,
+    "discount": 0.99,
+    "soft_target_tau": 0.005,
+    "policy_lr": 0.0003,
+    "qf_lr": 0.0003,
+    "vf_lr": 0.0003,
+    "aux_lr": 0.0003,
+    "context_lr": 0.0003,
+    "reward_scale": 10.0,
+    "sparse_rewards": false,
+    "kl_lambda": 0.1,
+    "use_information_bottleneck": true,
+    "use_next_obs_in_context": true,
+    "update_post_train": 1,
+    "num_exp_traj_eval": 3,
+    "recurrent": false,
+    "dump_eval_paths": false
+  },
+  "util_params": {
+    "base_log_dir": "/content/drive/My Drive/meta_robot/output",
+    "run_dir": "/content/drive/My Drive/meta_robot/",
+    "use_gpu": true,
+    "gpu_id": 0,
+    "debug": false,
+    "docker": false
+  },
+  "adapt_params": {
+    "continuous": false,
+    "context_window_steps": 20
+  },
+  "LatentGNN": {
+    "latent_dims": [
+      6,
+      6
+    ],
+    "num_kernels": 2,
+    "hidden_dict": {
+      "in_": [
+        128,
+        128
+      ],
+      "out_": [
+        32,
+        32
+      ]
+    }
+  },
+  "aux_params": {
+    "belief_dim": 2,
+    "hidden": [
+      16,
+      8
+    ],
+    "use": true,
+    "fixed_std": false,
+    "aux_std": null,
+    "beta": 10,
+    "decay": false
+  },
+  "decoupled_config": {
+    "use": false,
+    "xplor": {
+      "recurrent": false
+    },
+    "actor": {
+      "recurrent": false
+    }
+  }
+}

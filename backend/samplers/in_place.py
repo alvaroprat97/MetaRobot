@@ -34,7 +34,9 @@ class InPlacePathSampler(object):
                         accum_context=True, 
                         resample=1,
                         writer = None,
-                        iter_counter = None
+                        iter_counter = None,
+                        m_i_rewards = False,
+                        m_i_params = None
                         ):
         """
         Obtains samples in the environment until we reach either max_samples transitions or
@@ -51,6 +53,7 @@ class InPlacePathSampler(object):
             # if iter_counter is not None:
             #     iter_counter += n_steps_total
             # Rollout function is actually the collector
+            # m_i_rewards_post = m_i_rewards if n_trajs > 0 else False
             if isinstance(iter_counter, int) and isinstance(n_steps_total, int):
                 path = rollout(
                             self.env, 
@@ -59,6 +62,8 @@ class InPlacePathSampler(object):
                             accum_context=accum_context, 
                             writer = writer, 
                             iter_counter=iter_counter + n_steps_total,
+                            # m_i_rewards = m_i_rewards_post,
+                            # m_i_params = m_i_params
                             )
             else:
                 path = rollout(
@@ -67,6 +72,8 @@ class InPlacePathSampler(object):
                             max_path_length=self.max_path_length, 
                             accum_context=accum_context, 
                             writer = writer, 
+                            # m_i_rewards = m_i_rewards_post,
+                            # m_i_params = m_i_params
                             )
             # save the latent space Z that generated this trajectory
             path['context'] = policy.z.detach().cpu().numpy()

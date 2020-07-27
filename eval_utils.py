@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt 
 from envs.MetaPeg2D import denorm_pos, norm_pos
 import matplotlib 
+import seaborn as sns
 
 exp_id = "2020_07_08_15_51_03"
 expdir = 'output/Peg2D/{}/eval_trajectories/'.format(exp_id) # directory to load data from

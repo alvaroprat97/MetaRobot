@@ -90,6 +90,7 @@ def sim_policy(variant,
             output_size = variant['aux_params']['belief_dim'],
             std = variant['aux_params']['aux_std']
         )
+
     policy = TanhGaussianPolicy(
         hidden_sizes=[net_size, net_size, net_size],
         obs_dim=obs_dim + latent_dim,
@@ -97,14 +98,30 @@ def sim_policy(variant,
         action_dim=action_dim,
     )
     agent = PEARLAgent(
-        latent_dim,
-        context_encoder,
         policy,
-        aux_decoder = aux_decoder,
+        context_encoder=context_encoder,
+        aux_decoder=aux_decoder,
         aux_params = variant['aux_params'],
+        latent_dim=latent_dim,
         **variant['algo_params']
     )
     
+    if variant['decoupled_config']['use']:
+        xplor_policy = TanhGaussianPolicy(
+            hidden_sizes=[net_size, net_size, net_size],
+            obs_dim=obs_dim + latent_dim,
+            latent_dim=latent_dim,
+            action_dim=action_dim,
+        )
+        xplor_agent = PEARLAgent(
+            xplor_policy,
+            context_encoder=context_encoder,
+            aux_decoder=aux_decoder,
+            aux_params = variant['aux_params'],
+            latent_dim=latent_dim,
+            **variant['algo_params']
+        )
+
     # deterministic eval
     if deterministic:
         agent = MakeDeterministic(agent)
@@ -112,6 +129,8 @@ def sim_policy(variant,
     # load trained weights (otherwise simulate random policy)
     context_encoder.load_state_dict(torch.load(os.path.join(path_to_exp, 'context_encoder.pth')))
     policy.load_state_dict(torch.load(os.path.join(path_to_exp, 'policy.pth')))
+    if variant['decoupled_config']['use']:
+        xplor_policy.load_state_dict(torch.load(os.path.join(path_to_exp, 'xplor_policy.pth')))
     if aux_decoder is not None:
         aux_decoder.load_state_dict(torch.load(os.path.join(path_to_exp, 'aux_decoder.pth')))
 
@@ -119,7 +138,7 @@ def sim_policy(variant,
         env.set_visible(visible = visible)
         env.set_visibles()
         
-    max_steps = 100
+    max_steps = 200
     context_window_length = 20
     
     # loop through tasks collecting rollouts
@@ -130,19 +149,22 @@ def sim_policy(variant,
         env.reset_task(idx)
         env.rollout_counter = 0
         agent.clear_z()
+        if variant['decoupled_config']['use']:
+            xplor_agent.clear_z()
         paths = []
         if not continuous:
             for n in range(num_trajs):
+                _agent = agent if n >= variant['algo_params']['num_exp_traj_eval'] else xplor_agent
                 if view:
                     print(f'Adapting to task {idx} on trial {n}')
-                    env.view_rollout(agent, accum_context = True, max_steps = variant['algo_params']['max_path_length'],
+                    env.view_rollout(_agent, accum_context = True, max_steps = variant['algo_params']['max_path_length'],
                                     sparse_rewards = sparse_rewards)
                     env.reset_task(idx)
                 else:
-                    path = rollout(env, agent, max_path_length=variant['algo_params']['max_path_length'], 
+                    path = rollout(env,_agent, max_path_length=variant['algo_params']['max_path_length'], 
                                    accum_context=True, sparse_rewards = sparse_rewards)
                     if n >= variant['algo_params']['num_exp_traj_eval']:
-                        agent.infer_posterior(agent.context)
+                        _agent.infer_posterior(xplor_agent.context)
                     paths.append(path)
             env.all_paths.append(env.trajectories)
         else:
@@ -179,13 +201,15 @@ def main(config, path, num_trajs = 5, deterministic = False, sparse_rewards = Fa
         with open(osp.join(config)) as f:
             exp_params = json.load(f)
         variant = deep_update_dict(exp_params, variant)
-    variant['util_params']['use_gpu']
     return sim_policy(variant, path, num_trajs, deterministic, sparse_rewards, view, continuous, visible = True)
 
 if __name__ == "__main__":
     config = None
-    num_trajs = 2
-    path = "output/Peg2D/2020_07_08_15_51_03"
+    num_trajs = 5
+    # NOT DECOUPLED
+    # path = "output/Peg2D/2020_07_08_15_51_03"
+    # DECOUPLED
+    path = "output/Peg2D/2020_07_20_22_34_06"
     all_paths = main(config, path, num_trajs, 
                      deterministic = False, 
                      sparse_rewards = False, 

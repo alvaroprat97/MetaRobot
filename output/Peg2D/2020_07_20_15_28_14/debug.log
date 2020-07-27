@@ -1,0 +1,46 @@
+----------------------------------  ---------------
+Z mean train                            0.00335259
+Z variance train                        0.693558
+KL Divergence                           2.85575
+KL Loss                                 0.285575
+QF Loss                                19.3004
+VF Loss                                 4.19936
+Policy Loss                            -2.01644
+Aux Loss                               22.7559
+Q Predictions Mean                      0.00185812
+Q Predictions Std                       0.000361168
+Q Predictions Max                       0.00278506
+Q Predictions Min                       0.000864312
+V Predictions Mean                      0.00299417
+V Predictions Std                       0.000411671
+V Predictions Max                       0.00406856
+V Predictions Min                       0.00208121
+Log Pis Mean                           -2.02042
+Log Pis Std                             0.3813
+Log Pis Max                            -0.801205
+Log Pis Min                            -3.72725
+Policy mu Mean                          0.00111136
+Policy mu Std                           0.000875473
+Policy mu Max                           0.00268744
+Policy mu Min                          -0.000325212
+Policy log std Mean                    -1.55513e-05
+Policy log std Std                      0.000356172
+Policy log std Max                      0.000862381
+Policy log std Min                     -0.000929319
+Z mean eval                             0.0908577
+Z variance eval                         0.930937
+AverageTrainReturn_all_train_tasks     -7.8764
+AverageReturn_all_train_tasks          -7.72498
+AverageReturn_all_test_tasks           -8.41371
+Number of train steps total          1000
+Number of env steps total           28000
+Number of rollouts total                0
+Train Time (s)                        629.907
+(Previous) Eval Time (s)                0
+Sample Time (s)                        40.4532
+Epoch Time (s)                        670.36
+Total Train Time (s)                  681.15
+Epoch                                   0
+----------------------------------  ---------------
+2020-07-20 15:39:35.535152 UTC | [2020_07_20_15_28_14] Iteration #0 | Epoch Duration: 681.2086939811707
+2020-07-20 15:39:35.536231 UTC | [2020_07_20_15_28_14] Iteration #0 | Started Training: True

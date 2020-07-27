@@ -314,7 +314,8 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
 
     def view_rollout(self, agent, accum_context, max_steps, sparse_rewards = False, continuous_update = False):
         self.traj_rollout_counter = 0
-        pyglet.clock.schedule_interval(self.rollout_update, DT/10, agent, accum_context, max_steps, sparse_rewards, continuous_update)
+        print("Speeding out DT by factor 5")
+        pyglet.clock.schedule_interval(self.rollout_update, DT/5, agent, accum_context, max_steps, sparse_rewards, continuous_update)
         pyglet.app.run()
 
     def finish_rollout(self):
