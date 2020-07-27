@@ -1,5 +1,7 @@
 /**/.ipynb_checkpoints
 /**/*.pyc
 /**/logs/
+/**/output/
+/**/runs/
 /**/__pycache__/
 /**/*.torch
