@@ -7,7 +7,7 @@ from backend.data_management.replay_buffer import ReplayBuffer
 
 class SimpleReplayBuffer(ReplayBuffer):
     def __init__(
-            self, max_replay_buffer_size, observation_dim, action_dim,
+            self, max_replay_buffer_size, observation_dim, action_dim, latent_dim
     ):
         self._observation_dim = observation_dim
         self._action_dim = action_dim
@@ -18,21 +18,26 @@ class SimpleReplayBuffer(ReplayBuffer):
         # worry about termination conditions.
         self._next_obs = np.zeros((max_replay_buffer_size, observation_dim))
         self._actions = np.zeros((max_replay_buffer_size, action_dim))
+        self._contexts = np.zeros((max_replay_buffer_size, latent_dim))
         # Make everything a 2D np array to make it easier for other code to
         # reason about the shape of the data
         self._rewards = np.zeros((max_replay_buffer_size, 1))
         self._sparse_rewards = np.zeros((max_replay_buffer_size, 1))
+        self._num_fixed_trans = 0
+        self._fixed_episode_starts = []
+        self._num_demos = 0
         # self._terminals[i] = a terminal was received at time i
         self._terminals = np.zeros((max_replay_buffer_size, 1), dtype='uint8')
         self.clear()
 
     def add_sample(self, observation, action, reward, terminal,
-                   next_observation, **kwargs):
+                   next_observation, context, **kwargs):
         self._observations[self._top] = observation
         self._actions[self._top] = action
         self._rewards[self._top] = reward
         self._terminals[self._top] = terminal
         self._next_obs[self._top] = next_observation
+        self._contexts[self._top] = context
         self._sparse_rewards[self._top] = 0#kwargs['env_info'].get('sparse_reward', 0)
         self._advance()
 
@@ -42,34 +47,63 @@ class SimpleReplayBuffer(ReplayBuffer):
         self._episode_starts.append(self._cur_episode_start)
         self._cur_episode_start = self._top
 
+    def set_fixed_trans(self, num_fixed_trans):
+        self._num_fixed_trans = num_fixed_trans
+        self._fixed_episode_starts = [*self._episode_starts]
+        self._num_demos = len(self._fixed_episode_starts)
+
+    def num_demo_trans(self):
+        return self._num_fixed_trans
+
     def size(self):
         return self._size
 
+    def num_demos(self):
+        return self._num_demos
+
+    def num_episode_starts(self):
+        return len(self._episode_starts)
+
     def clear(self):
-        self._top = 0
-        self._size = 0
-        self._episode_starts = []
-        self._cur_episode_start = 0
+        self._top = self._num_fixed_trans
+        self._size = self._num_fixed_trans
+        self._episode_starts = self._fixed_episode_starts
+        self._cur_episode_start = self._num_fixed_trans
 
     def _advance(self):
         self._top = (self._top + 1) % self._max_replay_buffer_size
         if self._size < self._max_replay_buffer_size:
             self._size += 1
 
-    def sample_data(self, indices):
-        return dict(
-            observations=self._observations[indices],
-            actions=self._actions[indices],
-            rewards=self._rewards[indices],
-            terminals=self._terminals[indices],
-            next_observations=self._next_obs[indices],
-            sparse_rewards=self._sparse_rewards[indices],
-        )
+    def sample_data(self, indices, context = False):
+        if context:
+            contexts = self._contexts[indices]
+            return dict(
+                observations=self._observations[indices],
+                actions=self._actions[indices],
+                rewards=self._rewards[indices],
+                terminals=self._terminals[indices],
+                next_observations=self._next_obs[indices],
+                sparse_rewards=self._sparse_rewards[indices],
+                contexts = contexts,
+            )
+        else:
+            return dict(
+                observations=self._observations[indices],
+                actions=self._actions[indices],
+                rewards=self._rewards[indices],
+                terminals=self._terminals[indices],
+                next_observations=self._next_obs[indices],
+                sparse_rewards=self._sparse_rewards[indices],
+            )
 
-    def random_batch(self, batch_size):
+    def random_batch(self, batch_size, last = None, context = False):
         ''' batch of unordered transitions '''
-        indices = np.random.randint(0, self._size, batch_size)
-        return self.sample_data(indices)
+        if last is None:
+            indices = np.random.randint(0, self._size, batch_size)
+        else:
+            indices = np.random.randint(self._size - last, self._size, batch_size)
+        return self.sample_data(indices, context = context)
 
     def random_sequence(self, batch_size):
         ''' batch of trajectories '''

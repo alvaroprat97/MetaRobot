@@ -11,7 +11,7 @@ from torch import nn as nn
 from tensorboardX import SummaryWriter
 import backend.torch.pytorch_util as ptu
 from backend.core.eval_util import create_stats_ordered_dict
-from backend.core.meta_rl_algorithm import MetaRLAlgorithm
+from backend.core.meta_rl_demo_algorithm import MetaRLAlgorithm
 import itertools
 
 sys.path.append("")
@@ -23,6 +23,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             train_tasks,
             eval_tasks,
             nets,
+            demo_paths = None,
             policy_lr=1e-3,
             qf_lr=1e-3,
             vf_lr=1e-3,
@@ -38,6 +39,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             use_next_obs_in_context=False,
             sparse_rewards=False,
             decoupled = False,
+            l2_reg = True,
 
             soft_target_tau=1e-2,
             plotter=None,
@@ -53,6 +55,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
                     ),
                 train_tasks=train_tasks,
                 eval_tasks=eval_tasks,
+                demo_paths = demo_paths,
                 **kwargs
             )
         else:
@@ -61,6 +64,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
                 agent= nets[0],
                 train_tasks=train_tasks,
                 eval_tasks=eval_tasks,
+                demo_paths = demo_paths,
                 **kwargs
             )
 
@@ -76,6 +80,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
 
         self.recurrent = recurrent
         self.kl_lambda = kl_lambda
+        self.l2_reg = True
 
         # Criterions
         self.qf_criterion = nn.MSELoss()
@@ -100,6 +105,12 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
                 self.agent.policy.parameters(),
                 lr=policy_lr,
             )
+            self.pretrain_policy_optimizer = optimizer_class(
+                self.agent.policy.parameters(), 
+                lr=policy_lr, 
+                weight_decay=1e-3
+                )
+
         self.qf1_optimizer = optimizer_class(
             self.qf1.parameters(),
             lr=qf_lr,
@@ -159,7 +170,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
                 self.agent.aux_decoder.parameters(),
                 lr=aux_lr,
             )
-        self.context_extension = 1
+        self.context_extension = 0
 
     ###### Torch stuff #####
     @property
@@ -193,34 +204,39 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             r = batch['rewards'][None, ...]
         no = batch['next_observations'][None, ...]
         t = batch['terminals'][None, ...]
+        if 'contexts' in batch.keys():
+            ctxt = batch['contexts'][None, ...]
+            return [o, a, r, no, t, ctxt]
         return [o, a, r, no, t]
 
-    def sample_sac(self, indices, actor = True):
-        ''' sample batch of training data from a list of tasks for training the actor-critic '''
+    def sample_sac(self, indices, actor = True, last = None, return_context = False, batch_size = None):
+        ''' sample batch of training data from a list of tasks for training the actor-critic 
+            last = number which represents how far out you can randomly sample from (to preserve behavioural policy in demos)
+        '''
         # this batch consists of transitions sampled randomly from replay buffer
         # rewards are always dense
-
+        batch_size = batch_size if batch_size is not None else self.batch_size
         if self.decoupled:
             # print("SAC.py non implemented recurrent sampling")
             assert self.context_encoder is self.agent['xplor'].context_encoder
             assert self.agent['xplor'].context_encoder is self.agent['actor'].context_encoder
         if actor:
-            batches = [ptu.np_to_pytorch_batch(self.replay_buffer.random_batch(idx, batch_size=self.batch_size)) for idx in indices]
+            batches = [ptu.np_to_pytorch_batch(self.replay_buffer.random_batch(idx, batch_size=batch_size, last = last, context = return_context)) for idx in indices]
         else:
-            batches = [ptu.np_to_pytorch_batch(self.xplor_replay_buffer.random_batch(idx, batch_size=self.batch_size)) for idx in indices]
+            batches = [ptu.np_to_pytorch_batch(self.xplor_replay_buffer.random_batch(idx, batch_size=batch_size, last = last, context = return_context)) for idx in indices]
         unpacked = [self.unpack_batch(batch) for batch in batches]
         # group like elements together
         unpacked = [[x[i] for x in unpacked] for i in range(len(unpacked[0]))]
         unpacked = [torch.cat(x, dim=0) for x in unpacked]
         return unpacked
 
-    def sample_context(self, indices, extension = 0):
+    def sample_context(self, indices, batch_size = None, unpacked = False):
         ''' sample batch of context from a list of tasks from the replay buffer '''
         # make method work given a single task index
         if not hasattr(indices, '__iter__'):
             indices = [indices]
-
-        batches = [ptu.np_to_pytorch_batch(self.enc_replay_buffer.random_batch(idx, batch_size=self.embedding_batch_size + extension, sequence=self.recurrent)) for idx in indices]
+        batch_size = self.embedding_batch_size if batch_size is None else batch_size
+        batches = [ptu.np_to_pytorch_batch(self.enc_replay_buffer.random_batch(idx, batch_size=batch_size, sequence=self.recurrent)) for idx in indices]
         context = [self.unpack_batch(batch, sparse_reward=self.sparse_rewards) for batch in batches]
         # group like elements together
         context = [[x[i] for x in context] for i in range(len(context[0]))]
@@ -228,32 +244,67 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         # full context consists of [obs, act, rewards, next_obs, terms]
         # if dynamics don't change across tasks, don't include next_obs
         # don't include terminals in context
+        dim = 0 if unpacked else 2
         if self.use_next_obs_in_context:
-            context = torch.cat(context[:-1], dim=2)
+            context = torch.cat(context[:-1], dim=dim) if not unpacked else context[:-1]
         else:
-            context = torch.cat(context[:-2], dim=2)
+            context = torch.cat(context[:-2], dim=dim) if not unpacked else context[:-2]
         return context
 
-    ##### Training #####
-    def _do_training(self, indices):
+    def importance_sampling(self, a, b, c):
+        return None
+
+    def _do_pretraining(self, indices):
+        """
+        pretrain for one loop on indices
+        """
+        batch_size = self.embedding_batch_size
+        demo_context = self.sample_context(indices, batch_size = batch_size)
+        self.agent.demo_clear_z(demo_context, num_tasks = len(indices))
+
+        mb_size = self.embedding_mini_batch_size
+        num_updates = self.embedding_batch_size // (mb_size - self.context_extension)
+
+        # Num updates = 1 usually, unless recurrent
+        for i in range(num_updates):
+            context = demo_context[:, i * mb_size: i * mb_size + mb_size, :]
+            self._take_pretrain_step(indices, context)
+
+            # stop backprop
+            if self.decoupled:
+                for agent in self.agent.values():
+                    agent.detach_z()
+            else:
+                self.agent.detach_z()
         
+    ##### Training #####
+    def _do_training(self, indices, collected_indices = None):
+        """
+        collected_indices: those indices used in recent collection. To be used for the behavioural collection during IS.
+        """
+
         mb_size = self.embedding_mini_batch_size + self.context_extension
         num_updates = self.embedding_batch_size // (mb_size - self.context_extension)
 
         # sample context batch, use a batch size (from config) to determine how much context to sample
         context_batch = self.sample_context(indices)
+        # collected_context_batch = None
+        # if collected_indices is not None:
+        #     # Retreive the transitions of the demo contexts used during collection.
+        #     collected_context_batch = self.sample_context(collected_indices) 
 
         # zero out context and hidden encoder state
         if self.decoupled:
-            self.agent['xplor'].clear_z(num_tasks=len(indices))
-            self.agent['xplor'].clear_z(num_tasks=len(indices))
+            self.agent['xplor'].demo_clear_z(context_batch,num_tasks=len(indices))
+            self.agent['actor'].demo_clear_z(context_batch,num_tasks=len(indices))
         else:
-            self.agent.clear_z(num_tasks=len(indices))
+            self.agent.demo_clear_z(context_batch,num_tasks=len(indices))
+            self.agent.update_behaviour_policy()
 
         # do this in a loop so we can truncate backprop in the recurrent encoder
         for i in range(num_updates):
             context = context_batch[:, i * mb_size: i * mb_size + mb_size, :]
-            self._take_step(indices, context)
+            self._take_step(indices, collected_indices, context)
 
             # stop backprop
             if self.decoupled:
@@ -316,17 +367,12 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             task_z = torch.cat(task_z, dim=0)
         x_tot = []
 
-        # Multithread this
-        # tm = time()
         for idx in range(b//mbs):
             x_ = self._extended_context(context, obs, actions, rewards, next_obs, idx)
             x_tot.append(x_)
         x_tot = torch.cat(x_tot)
-        # tm1 = time()
         z_ = self.agent['xplor']._infer_posterior(x_tot)
         z_ = torch.cat([m.repeat(mbs,1) for m in z_])
-        # tm2 = time()
-        # print(f"Took {tm2 - tm1} to forward, {tm1 - tm} to loop")
 
         rewards = rewards.view(t * b, -1)
         obs = obs.view(t * b, -1)
@@ -339,7 +385,54 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         r_mi = torch.abs(basis - target)
         return r_mi
 
-    def _take_step(self, indices, context):
+    def _take_pretrain_step(self, indices, demo_context):
+        num_tasks = len(indices)
+
+        # Observations and Actions generated by the demonstrations since replay only contains demos at this point.
+        obs, actions, _, _, _ = self.sample_sac(indices, actor=True)
+
+        aux_targets = self.env._get_targets(indices)
+        t, b, _ = obs.size()
+        assert t == num_tasks
+        targets = [list(torch.tensor(tuple(aux_targets[i])*b, device = ptu.device).split(len(aux_targets[i]))) for i in range(len(indices))]
+        targets = list(itertools.chain(*targets))    
+        targets = torch.stack(targets)
+
+        policy_outputs, _, aux_outputs = self.agent(obs, demo_context, aux_targets = targets, bc_actions = actions)
+
+        _, policy_mean, policy_log_std, _ = policy_outputs[:4]
+        aux_log_pi = aux_outputs[3]
+        bc_log_pi = policy_outputs[-1]
+
+        # Context encoder IB
+        self.context_optimizer.zero_grad()
+        if self.use_information_bottleneck:
+            kl_div = self.agent['xplor'].compute_kl_div() if self.decoupled else self.agent.compute_kl_div()
+            kl_loss = self.kl_lambda * kl_div
+            kl_loss.backward(retain_graph=True)
+
+        # Auxilliary decoder optimisation & gradient flow to encoder
+        self.aux_optimizer.zero_grad()
+        aux_loss = -self.agent.beta*torch.mean(aux_log_pi.flatten())
+        aux_loss.backward()
+
+        self.context_optimizer.step()
+        self.aux_optimizer.step()
+
+        # Optimise the policy using BC
+                
+        policy_loss = -torch.mean(bc_log_pi) # LogLoss
+        mean_reg_loss = self.policy_mean_reg_weight * (policy_mean**2).mean()
+        std_reg_loss = self.policy_std_reg_weight * (policy_log_std**2).mean()
+        policy_reg_loss = mean_reg_loss + std_reg_loss # RegRession loss (Tanh)
+        # TODO all L2 Loss
+
+        policy_loss = policy_loss + policy_reg_loss
+        self.pretrain_policy_optimizer.zero_grad()
+        policy_loss.backward()
+        self.pretrain_policy_optimizer.step()
+
+    def _take_step(self, indices, collected_indices, context):
 
         # print("context should come from explorer buffer mainly")
         # if self.decoupled:
@@ -347,28 +440,50 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         #     context = context[:,:-self.context_extension,:]
 
         num_tasks = len(indices)
-
-        # data is (task, batch, feat)
-        obs, actions, rewards, next_obs, terms = self.sample_sac(indices, actor=True)
+        # data is in dimensions (task, batch, feat)
+        obs, actions, rewards, next_obs, terms = self.sample_sac(indices, 
+                                                                actor=True
+                                                                )
+        # Collect recent observiations and actions, and the latent space used to generate these. Used for mutual information matching. 
+        c_obs, c_actions, _, c_nobs, c_terms, c_context = self.sample_sac(collected_indices, 
+                                                                        actor = True, 
+                                                                        last = self.num_steps_prior, 
+                                                                        return_context = True,
+                                                                        batch_size=self.embedding_batch_size
+                                                                        )
+        # TODO Should just unpack the context for accuracy, reducing mismatch of inference.
+        demo_obs, demo_actions, _, _ = self.sample_context(indices, unpacked=True) 
         if self.decoupled:
             xplor_obs, xplor_actions, xplor_rewards, xplor_next_obs, xplor_terms = self.sample_sac(indices, actor=False)
+        
         aux_targets = self.env._get_targets(indices)
-
         # Get auxilliary targets in tensor format
         t, b, _ = obs.size()
-        targets = [list(torch.tensor(tuple(aux_targets[i])*b, device = ptu.device).split(len(aux_targets[i]))) for i in range(len(indices))]
-        targets = list(itertools.chain(*targets))    
-        targets = torch.stack(targets)
+        # assert t == num_tasks 
+        # targets = [list(torch.tensor(tuple(aux_targets[i])*b, device = ptu.device).split(len(aux_targets[i]))) for i in range(len(indices))]
+        # targets = list(itertools.chain(*targets))    
+        # targets = torch.stack(targets)
+        demo_t, demo_b, _ = demo_obs.size()
+        assert demo_t == num_tasks
+        demo_targets = [list(torch.tensor(tuple(aux_targets[i])*demo_b, device = ptu.device).split(len(aux_targets[i]))) for i in range(len(indices))]
+        demo_targets = list(itertools.chain(*demo_targets))    
+        demo_targets = torch.stack(demo_targets)
 
         # run inference in networks
+        detached_aux = True # Activated for now.
         if self.decoupled:
             policy_outputs, task_z, aux_outputs = self.agent['actor'](obs, context, aux_targets = targets)
             xplor_policy_outputs, xplor_task_z, xplor_aux_outputs = self.agent['xplor'](xplor_obs, context, aux_targets = targets)
         else:
-            policy_outputs, task_z, aux_outputs = self.agent(obs, context, aux_targets = targets)
+            # Policy outputs used for RL agent
+            policy_outputs, task_z, aux_outputs = self.agent(obs, context)
+            # IL inference to retreive log probabilities (supervised learning part) from demonstration transitions
+            demo_policy_outputs, demo_aux_outputs = self.agent.bc_forward(demo_obs, demo_actions, aux_targets = demo_targets, aux_no_grad = detached_aux)
 
         new_actions, policy_mean, policy_log_std, log_pi = policy_outputs[:4]
-        aux_log_pi = aux_outputs[3]
+        # aux_log_pi = aux_outputs[3]
+        aux_log_pi = demo_aux_outputs[3]
+        bc_log_pi = demo_policy_outputs[-1]
 
         if self.decoupled:
             xplor_new_actions, xplor_policy_mean, xplor_policy_log_std, xplor_log_pi = xplor_policy_outputs[:4]
@@ -413,11 +528,23 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             kl_loss = self.kl_lambda * kl_div
             kl_loss.backward(retain_graph=True)
 
-        # Auxilliary decoder optimisation & gradient flow to encoder
+        # Mutual Information dependancy loss
+        kappa = 1.0
+        importance_sampling = False
+        c_terms = ptu.FloatTensor(c_terms.float())
+        # Convert terms to int form as encoder can only receive sparse rewards!
+        enc_context = torch.cat([c_obs, c_actions, c_terms, c_nobs], dim = 2)
+        iS_factor = self.importance_sampling(c_obs, c_actions, c_context) if importance_sampling else 1.0
+        m_i = iS_factor*torch.mean(self.agent.encoder_log_probs(enc_context, target_latent_space = c_context).flatten())
+        m_i_loss = -kappa*m_i
+        m_i_loss.backward(retain_graph=True)
+
+        # Auxilliary decoder optimisation & gradient flow to encoder (optional, currently no gradient backprop to encoder model)
         self.aux_optimizer.zero_grad()
         aux_loss = -self.agent['xplor'].beta*torch.mean(xplor_aux_log_pi.flatten()) if self.decoupled else -self.agent.beta*torch.mean(aux_log_pi.flatten())
-        aux_loss.backward(retain_graph=True)
-        
+        # aux_loss.backward(retain_graph=True)
+        aux_loss.backward()
+
         # qf and encoder update (note encoder does not get grads from policy or vf)
         self.qf1_optimizer.zero_grad()
         self.qf2_optimizer.zero_grad()
@@ -469,21 +596,26 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
             self.xplor_vf_optimizer.step()
         self._update_target_network()
 
-        # policy update
+        # policy update 
         # n.b. policy update includes dQ/da
         log_policy_target = min_q_new_actions
         policy_loss = (log_pi - log_policy_target).mean()
-
         mean_reg_loss = self.policy_mean_reg_weight * (policy_mean**2).mean()
         std_reg_loss = self.policy_std_reg_weight * (policy_log_std**2).mean()
-        pre_tanh_value = policy_outputs[-1]
+        pre_tanh_value = policy_outputs[-2]
         pre_activation_reg_loss = self.policy_pre_activation_weight * ((pre_tanh_value**2).sum(dim=1).mean())
         policy_reg_loss = mean_reg_loss + std_reg_loss + pre_activation_reg_loss
         policy_loss = policy_loss + policy_reg_loss
 
-        self.policy_optimizer.zero_grad()
+       # BC trajectory optimisation
+        demo_policy_loss = -torch.mean(bc_log_pi) 
+        policy_loss = policy_loss + demo_policy_loss
+
+        # Policy Step
+        pol_optimizer = self.pretrain_policy_optimizer if self.l2_reg else self.policy_optimizer
+        pol_optimizer.zero_grad()
         policy_loss.backward()
-        self.policy_optimizer.step()
+        pol_optimizer.step()
 
         if self.decoupled:
             xplor_log_policy_target = xplor_min_q_new_actions
@@ -491,7 +623,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
 
             xplor_mean_reg_loss = self.policy_mean_reg_weight * (xplor_policy_mean**2).mean()
             xplor_std_reg_loss = self.policy_std_reg_weight * (xplor_policy_log_std**2).mean()
-            xplor_pre_tanh_value = xplor_policy_outputs[-1]
+            xplor_pre_tanh_value = xplor_policy_outputs[-2]
             xplor_pre_activation_reg_loss = self.policy_pre_activation_weight * ((xplor_pre_tanh_value**2).sum(dim=1).mean())
             xplor_policy_reg_loss = xplor_mean_reg_loss + xplor_std_reg_loss + xplor_pre_activation_reg_loss
             xplor_policy_loss = xplor_policy_loss + xplor_policy_reg_loss
@@ -524,6 +656,8 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
                 self.writer.add_scalar('loss/Aux',np.mean(ptu.get_numpy(aux_loss)),self._n_train_steps_total)
                 self.writer.add_scalar('loss/Policy',np.mean(ptu.get_numpy(policy_loss)),self._n_train_steps_total)
                 self.writer.add_scalar('loss/KL',ptu.get_numpy(kl_loss),self._n_train_steps_total)
+                self.writer.add_scalar('loss/info', ptu.get_numpy(m_i_loss),self._n_train_steps_total)
+                self.writer.add_scalar('loss/demo_bc ', ptu.get_numpy(demo_policy_loss),self._n_train_steps_total)
 
             self.eval_statistics.update(create_stats_ordered_dict(
                 'Q Predictions',

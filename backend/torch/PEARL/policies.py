@@ -80,6 +80,7 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
             reparameterize=False,
             deterministic=False,
             return_log_prob=False,
+            bc_actions = None,
     ):
         """
         :param obs: Observation
@@ -102,6 +103,8 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
         expected_log_prob = None
         mean_action_log_prob = None
         pre_tanh_value = None
+        bc_log_prob = None
+
         if deterministic:
             action = torch.tanh(mean)
         else:
@@ -120,6 +123,9 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
                     pre_tanh_value=pre_tanh_value
                 )
                 log_prob = log_prob.sum(dim=1, keepdim=True)
+                if bc_actions is not None:
+                    bc_log_prob = tanh_normal.log_prob(bc_actions) #- torch.log(1 - bc_actions.pow(2) + epsilon)
+                    bc_log_prob = bc_log_prob.sum(dim=1, keepdim = True)
             else:
                 if reparameterize:
                     action = tanh_normal.rsample()
@@ -128,7 +134,7 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
 
         return (
             action, mean, log_std, log_prob, expected_log_prob, std,
-            mean_action_log_prob, pre_tanh_value,
+            mean_action_log_prob, pre_tanh_value, bc_log_prob
         )
 
 

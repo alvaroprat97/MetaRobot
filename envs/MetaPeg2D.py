@@ -118,7 +118,7 @@ class Segment:
         space.add(self.body, shape)
 
 class RobotEnvironment(object):
-    def __init__(self, space, arm_lengths = [250, 200, 200], radii = [5, 5, 10], GOAL = (1000, 400)):
+    def __init__(self, space, arm_lengths = [250, 200, 200], radii = [5, 5, 10], GOAL = (1000, 400), expert = False):
         self.space = space
         self.GOAL = GOAL
         self.PivotPoints = [None]*(1+len(arm_lengths))
@@ -126,6 +126,8 @@ class RobotEnvironment(object):
         self.Arms = Arms(arm_lengths, radii = radii)
         self.range_multiplier = 5
         self.set_action_range(vals = [(2, 20), (1, np_pi/16)]) # 2 Velocities and 1 angular velocity
+        self.expert = expert
+
         self.init_arms()
         self.init_robot()
         self.obs = self.get_obs()
@@ -336,9 +338,9 @@ class RobotEnvironment(object):
 
     def get_obs(self):
         """Get obs, currently showing tuples for each body:
-            [0] Vec2d POSITION
-            [1] Scalar VELOCITY (mid-center of body arms)
-            [2,3] Scalar cos, sin of ANGLE
+            [0] Vec2d POSITION, relative to goal when using expert agents.
+            [1] Scalar VELOCITY (mid-center of body arms).
+            [2,3] Scalar cos, sin of ANGLE.
         """
 
         peg = self.get_peg_tip()
@@ -347,8 +349,13 @@ class RobotEnvironment(object):
         assert body.id is 'peg'
 
         # Meta RL obs
-        normed_peg = norm_pos(peg)
-        self.obs = [normed_peg.x, normed_peg.y, np.cos(true_angle), np.sin(true_angle)]
+        peg_ = norm_pos(peg)
+        # Expert case, use relative distance to the goal.
+        if self.expert:
+            peg_ = norm_pos(self.GOAL - peg) 
+
+        self.obs = [peg_.x, peg_.y, np.cos(true_angle), np.sin(true_angle)]
+        
         # RL algorithm obs
         # self.obs = [self.GOAL.x - peg.x, self.GOAL.y - peg.y, np.cos(true_angle), np.sin(true_angle)]
         return np.array(self.obs)

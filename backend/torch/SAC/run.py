@@ -105,53 +105,53 @@ if variant['save_model']:
 
 ### Test
 
-from sac import SAC
-from utils import *
-from models import weights_init
-import sys
-import argparse
-sys.path.insert(0,'../../envs/')
-from PegRobot2D import Frontend, WINDOW_X, WINDOW_Y
+# from sac import SAC
+# from utils import *
+# from models import weights_init
+# import sys
+# import argparse
+# sys.path.insert(0,'../../envs/')
+# from PegRobot2D import Frontend, WINDOW_X, WINDOW_Y
 
-variant = dict(
-        algorithm="SAC",
-        version="normal",
-        seed = 123456,
-        replay_buffer_size=int(1e5),
-        save_model = True,
-        algorithm_kwargs=dict(
-            num_epochs=50,
-            num_eval_steps_per_epoch=1000,
-            num_trains_per_train_loop=250,
-            num_expl_steps_per_train_loop=1000,
-            min_num_steps_before_training=2500, # Random exploration steps Initially
-            max_path_length=250,
-            batch_size=256,
-        ),
+# variant = dict(
+#         algorithm="SAC",
+#         version="normal",
+#         seed = 123456,
+#         replay_buffer_size=int(1e5),
+#         save_model = True,
+#         algorithm_kwargs=dict(
+#             num_epochs=50,
+#             num_eval_steps_per_epoch=1000,
+#             num_trains_per_train_loop=250,
+#             num_expl_steps_per_train_loop=1000,
+#             min_num_steps_before_training=2500, # Random exploration steps Initially
+#             max_path_length=250,
+#             batch_size=256,
+#         ),
 
-        trainer_kwargs=dict(
-            gamma=0.99,
-            tau=5e-3,
-            target_update_interval=1,
-            lr=3e-4,
-            alpha = 0.2,
-            policy = "Gaussian",
-            automatic_entropy_tuning=True,
-            hidden_size = 256
-        ),
+#         trainer_kwargs=dict(
+#             gamma=0.99,
+#             tau=5e-3,
+#             target_update_interval=1,
+#             lr=3e-4,
+#             alpha = 0.2,
+#             policy = "Gaussian",
+#             automatic_entropy_tuning=True,
+#             hidden_size = 256
+#         ),
 
-        env_args = [
-            WINDOW_X,
-            WINDOW_Y,
-            "Peg 2D Robot"
-            ],
+#         env_args = [
+#             WINDOW_X,
+#             WINDOW_Y,
+#             "Peg 2D Robot"
+#             ],
 
-        env_kwargs = dict(
-            vsync = False,
-            resizable = False,
-            visible = False
-            )
-)
+#         env_kwargs = dict(
+#             vsync = False,
+#             resizable = False,
+#             visible = False
+#             )
+# )
 
 # Environment
 # env = Frontend(*variant['env_args'], **variant['env_kwargs'])

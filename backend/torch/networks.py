@@ -288,9 +288,13 @@ class NormalAux(Mlp):
                 task_descriptor = None,
                 reparameterize=False,
                 deterministic=False,
-                return_log_prob=False
+                return_log_prob=False,
+                aux_no_grad = False,
                 ):
-        h = z
+        if aux_no_grad:
+            h = z.detach()
+        else:
+            h = z
         for _, fc in enumerate(self.fcs):
             h = self.hidden_activation(fc(h))
         mean = self.last_fc(h)

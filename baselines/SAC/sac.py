@@ -2,14 +2,18 @@
 
 import os
 import sys
-sys.path.insert(0,'../core/')
 import torch
 import torch.nn.functional as F
 from torch.optim import Adam
-from utils import soft_update, hard_update, ReplayBuffer
-from models import GaussianPolicy, QNetwork, DeterministicPolicy, weights_init
-import numpy as np
 
+sys.path.insert(0,'../core/')
+sys.path.append("../../")
+sys.path.append("../")
+
+import backend.torch.pytorch_util as ptu
+from baselines.core.utils import soft_update, hard_update
+from baselines.SAC.models import GaussianPolicy, QNetwork, DeterministicPolicy, weights_init
+import numpy as np
 
 class SAC(object):
     def __init__(self, num_inputs, num_actions, action_range,
@@ -22,7 +26,6 @@ class SAC(object):
                 hidden_size = 256,
                 lr = 3e-4,
                 delayed_policy_steps = 2,
-                replay_buffer_size = 1e5,
                 ):
 
         self.num_actions = num_actions
@@ -52,6 +55,9 @@ class SAC(object):
 
         hard_update(self.critic_target, self.critic)
 
+        self.batch_size = None
+        self.replay_buffer = None
+
         if self.policy_type == "Gaussian":
             sz = torch.zeros(size = [num_actions,1]).shape
             # Target Entropy = −dim(A) (e.g. , -6 for HalfCheetah-v2) as given in the paper
@@ -70,7 +76,29 @@ class SAC(object):
             self.policy = DeterministicPolicy(num_inputs, num_actions, hidden_size, action_range).to(self.device)
             self.policy_optim = Adam(self.policy.parameters(), lr=lr)
 
-        self.replay_buffer = ReplayBuffer(replay_buffer_size)
+        # self.replay_buffer = ReplayBuffer(replay_buffer_size)
+
+    def unpack_batch(self, batch, sparse_reward=False):
+        ''' unpack a batch and return individual elements '''
+        o = batch['observations'][None, ...]
+        a = batch['actions'][None, ...]
+        if sparse_reward:
+            r = batch['sparse_rewards'][None, ...]
+        else:
+            r = batch['rewards'][None, ...]
+        no = batch['next_observations'][None, ...]
+        t = batch['terminals'][None, ...]
+        return [o, a, r, no, t]
+
+    def sample_sac(self, indices, actor = True):
+        ''' sample batch of training data from a list of tasks for training the actor-critic '''
+
+        batches = [ptu.np_to_pytorch_batch(self.replay_buffer.random_batch(idx, batch_size=self.batch_size)) for idx in indices]
+        unpacked = [self.unpack_batch(batch) for batch in batches]
+        # group like elements together
+        unpacked = [[x[i] for x in unpacked] for i in range(len(unpacked[0]))]
+        unpacked = [torch.cat(x, dim=0) for x in unpacked]
+        return unpacked
 
     def get_action(self, state, evaluate=False):
         state = torch.FloatTensor(state).to(self.device).unsqueeze(0)
@@ -80,17 +108,18 @@ class SAC(object):
             _, _, action = self.policy.sample(state)
         return action.detach().cpu().numpy()[0]
 
-    def update_parameters(self, batch_size, updates, PER = False, importance_sampling = False):
+    def update_parameters(self, updates, indices, PER = False, importance_sampling = False):
         """Sample a batch from self.replay_buffer (replay buffer) and update all NNs,
             PER allows prioritised experience"""
-
-        state_batch, action_batch, reward_batch, next_state_batch, mask_batch = self.replay_buffer.sample(batch_size=batch_size, per=PER)
-
-        state_batch = torch.FloatTensor(state_batch).to(self.device)
-        next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
-        action_batch = torch.FloatTensor(action_batch).to(self.device)
-        reward_batch = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1)
-        mask_batch = torch.FloatTensor(mask_batch).to(self.device).unsqueeze(1)
+        assert PER is False and importance_sampling is False
+        
+        state_batch, action_batch, reward_batch, next_state_batch, mask_batch = self.sample_sac(indices)
+        t, b, _ = state_batch.size()
+        state_batch = torch.FloatTensor(state_batch).to(self.device).view(t*b, -1)
+        next_state_batch = torch.FloatTensor(next_state_batch).to(self.device).view(t*b, -1)
+        action_batch = torch.FloatTensor(action_batch).to(self.device).view(t*b, -1)
+        reward_batch = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1).view(t*b, -1)
+        mask_batch = torch.FloatTensor(mask_batch).to(self.device).unsqueeze(1).view(t*b, -1)
 
         # print(state_batch.shape) # Batch x Num States
         # print(next_state_batch.shape) # Batch x Num States

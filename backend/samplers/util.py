@@ -293,3 +293,81 @@ def get_stat_in_paths(paths, dict_name, scalar_name):
         [info[scalar_name] for info in path[dict_name]]
         for path in paths
     ]
+
+def expert_rollout(env, agent, 
+            max_path_length=np.inf, 
+            animated=False, 
+            iter_counter = 0,
+            writer = None,
+            eval = False
+            ):
+
+    observations = []
+    actions = []
+    rewards = []
+    terminals = []
+    agent_infos = []
+    env_infos = []
+    o = env.reset()
+    next_o = None
+    path_length = 0
+    path_reward = 0
+
+    while path_length < max_path_length:
+        a = agent.get_action(o, evaluate = eval)
+        next_o, r, d, env_info = env.step(a)
+        agent_info = 0
+        if animated:
+            env.set_schedule(o, a)
+            env.render()
+
+        observations.append(o)
+        rewards.append(r)
+        terminals.append(d)
+        actions.append(a)
+        agent_infos.append(agent_info)
+        path_length += 1
+        path_reward += r
+        o = next_o
+        env_infos.append(env_info)
+        if d:
+            print(f"Reached Goal at path length {path_length}")
+            break
+    
+    if animated:
+        env.render()
+
+    if not eval:
+        if isinstance(writer, SummaryWriter):
+            # print(iter_counter + path_length)
+            writer.add_scalar('scalars/PathLength', path_length, iter_counter + path_length)#, iter_counter + path_length)
+            writer.add_scalar('scalars/PathReward', path_reward, iter_counter + path_length)#, iter_counter + path_length)
+            writer.add_scalar('action/action_x', a[0], iter_counter + path_length)
+            writer.add_scalar('action/action_y', a[1], iter_counter + path_length)
+    else:
+        if isinstance(writer, SummaryWriter):
+            writer.add_scalar('scalars/Eval/PathLength', path_length, iter_counter + path_length)#, iter_counter + path_length)
+            writer.add_scalar('scalars/Eval/PathReward', path_reward, iter_counter + path_length)#, iter_counter + path_length)
+
+    actions = np.array(actions)
+    if len(actions.shape) == 1:
+        actions = np.expand_dims(actions, 1)
+    observations = np.array(observations)
+    if len(observations.shape) == 1:
+        observations = np.expand_dims(observations, 1)
+        next_o = np.array([next_o])
+    next_observations = np.vstack(
+        (
+            observations[1:, :],
+            np.expand_dims(next_o, 0)
+        )
+    )
+    return dict(
+        observations=observations,
+        actions=actions,
+        rewards=np.array(rewards).reshape(-1, 1),
+        next_observations=next_observations,
+        terminals=np.array(terminals).reshape(-1, 1),
+        agent_infos=agent_infos,
+        env_infos=env_infos,
+    )

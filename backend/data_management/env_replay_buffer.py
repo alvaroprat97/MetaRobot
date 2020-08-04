@@ -13,6 +13,7 @@ class MultiTaskReplayBuffer(object):
             max_replay_buffer_size,
             env,
             tasks,
+            latent_dim = 6
     ):
         """
         :param max_replay_buffer_size:
@@ -25,7 +26,8 @@ class MultiTaskReplayBuffer(object):
         self.task_buffers = dict([(idx, SimpleReplayBuffer(
             max_replay_buffer_size=max_replay_buffer_size,
             observation_dim=get_dim(self._ob_space),
-            action_dim=get_dim(self._action_space),
+            action_dim= get_dim(self._action_space),
+            latent_dim = latent_dim
         )) for idx in tasks])
 
 
@@ -41,11 +43,11 @@ class MultiTaskReplayBuffer(object):
     def terminate_episode(self, task):
         self.task_buffers[task].terminate_episode()
 
-    def random_batch(self, task, batch_size, sequence=False):
+    def random_batch(self, task, batch_size, sequence=False, last = None, context = False):
         if sequence:
             batch = self.task_buffers[task].random_sequence(batch_size)
         else:
-            batch = self.task_buffers[task].random_batch(batch_size)
+            batch = self.task_buffers[task].random_batch(batch_size, last = last, context = context)
         return batch
 
     def num_steps_can_sample(self, task):
@@ -58,6 +60,12 @@ class MultiTaskReplayBuffer(object):
         # path is a dictionary of 'actions', 'rewards', etc. within a trajectory
         for path in paths:
             self.task_buffers[task].add_path(path)
+
+    def set_ground(self, task, num_fixed_trans):
+        """
+        Sets undeallocatable transitions. Mainly for the demonstrations to always be present in the encoder buffer
+        """
+        self.task_buffers[task].set_fixed_trans(num_fixed_trans)
 
     def clear_buffer(self, task):
         self.task_buffers[task].clear()

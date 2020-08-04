@@ -49,7 +49,8 @@ class ReplayBuffer(object, metaclass=abc.ABCMeta):
                 next_obs,
                 terminal,
                 agent_info,
-                env_info
+                env_info,
+                context
         ) in enumerate(zip(
             path["observations"],
             path["actions"],
@@ -58,6 +59,7 @@ class ReplayBuffer(object, metaclass=abc.ABCMeta):
             path["terminals"],
             path["agent_infos"],
             path["env_infos"],
+            path["context"]
         )):
             self.add_sample(
                 obs,
@@ -65,6 +67,7 @@ class ReplayBuffer(object, metaclass=abc.ABCMeta):
                 reward,
                 terminal,
                 next_obs,
+                context,
                 agent_info=agent_info,
                 env_info=env_info,
             )

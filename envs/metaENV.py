@@ -19,12 +19,14 @@ from envs.MetaPeg2D import RobotEnvironment, StaticEnvironment, WINDOW_X, WINDOW
 
 
 class ENV(object):
-    def __init__(self):
+    def __init__(self, expert = False):
 
         self.spaces = []
         self.statics = []
         self.robos = []
-        
+
+        self.expert = expert
+
         GOALS = [Vec2d(GOAL) for GOAL in random_tasks]
         arm_lengths = [325 + 50, 275 + 100, 200 + 75]
         self.arm_lengths = arm_lengths
@@ -36,11 +38,11 @@ class ENV(object):
             space.damping = 0.95
             self.spaces.append(space)
 
-
             static = StaticEnvironment(space, GOAL = GOAL)
             self.statics.append(static)
 
-            robo = RobotEnvironment(space, arm_lengths= arm_lengths, radii = [5, 7, 10], GOAL=GOAL)
+            robo = RobotEnvironment(space, arm_lengths= arm_lengths, radii = [5, 7, 10], GOAL=GOAL, expert = expert)
+
             self.robos.append(robo)
 
             del space, static, robo
@@ -55,7 +57,7 @@ class ENV(object):
         self.task_idx = 0
 
         # soft velocity polyak transition
-        self.mu_avg = 0.2 # WWASS 0.2
+        self.mu_avg = 0.2  
 
     def set_task_idx(self, idx):
         self.task_idx = idx
@@ -73,7 +75,8 @@ class ENV(object):
         raise Exception(NotImplemented)     
         
     def _get_obs(self, idx = 0):
-        data = self.robos[idx].get_obs() # GET DATA FROM SIMULATION ENVIRONMENT
+        data = self.robos[idx].get_obs() # if not self.expert else self.robos[idx].get_obs(self.GOALS[idx])  
+        # GET DATA FROM SIMULATION ENVIRONMENT
         # RETURN OBSERVATION DIMENSION
         return data
 
@@ -84,22 +87,24 @@ class ENV(object):
             return self.GOALS[idx]
 
     def reset(self):
-        self.robos[self.task_idx].reset_bodies(random_reset = True)
-        obs = self.robos[self.task_idx].get_obs()
+        idx = self.task_idx
+        self.robos[idx].reset_bodies(random_reset = True)
+        obs = self.robos[idx].get_obs() #if not self.expert else self.robos[idx].get_obs(self.GOALS[idx])
         return obs
 
     def reset_tasks(self, idxs):
         obs = []
         for idx in idxs:
             self.robos[idx].reset_bodies(random_reset = True)
-            obs.append(self.robos[idx].get_obs())
+            o_ = self.robos[idx].get_obs() #if not self.expert else self.robos[idx].get_obs(self.GOALS[idx])
+            obs.append(o_)
         self.encountered = 0
         return obs
 
     def reset_task(self, idx):
         self.robos[idx].reset_bodies(random_reset = True)
         self.encountered = 0
-        return self.robos[idx].get_obs()
+        return self.robos[idx].get_obs() #if not self.expert else self.robos[idx].get_obs(self.GOALS[idx])
 
     def step(self, action, dt = DT, step = 0):
         "Watch out with action dimensions and Normalisation wrappers"
@@ -109,7 +114,7 @@ class ENV(object):
     
         self.update(dt = dt, action=denormalised_action)
 
-        new_obs = self.robos[self.task_idx].get_obs()
+        new_obs = self.robos[self.task_idx].get_obs() #if not self.expert else self.robos[self.task_idx].get_obs(self.GOALS[self.task_idx])
         reward, done = self.reward_func(new_obs)
 
         return new_obs, reward, done, dummy
@@ -131,20 +136,20 @@ class ENV(object):
 
         mask = False
         peg_tip = self.robos[self.task_idx].get_peg_tip()
-        goal_offset = 50
+        goal_offset = 20
 
         rpos_x = (self.GOALS[self.task_idx].x + PEG_DEPTH - peg_tip.x)/WINDOW_X
         rpos_y = (self.GOALS[self.task_idx].y - peg_tip.y)/WINDOW_Y
 
-        reward = -Vec2d(rpos_x, rpos_y).length + 0.1*(obs[-2])*abs(obs[-2]) - 0.05
-        reward = np.clip(reward,-np.inf,0)
+        reward = -Vec2d(rpos_x, rpos_y).length + 0.1*(obs[-2])*abs(obs[-2]) - 0.1
+        # reward = np.clip(reward,-np.inf,0)
 
         if peg_tip.x > self.GOALS[self.task_idx].x + PEG_DEPTH - goal_offset:
-            reward = 1
+            # reward = 1
             self.encountered += 1
             mask = True
-            if self.encountered%2 == 0:
-                print(f"\n MADE IT {self.encountered} TIMES TO GOAL \n")
+            # if self.encountered%2 == 0:
+                # print(f"\n MADE IT {self.encountered} TIMES TO GOAL \n")
 
         return reward, mask
 
@@ -155,7 +160,12 @@ class ENV(object):
 class VisualiserWrapper(pyglet.window.Window, ENV):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        ENV.__init__(self)
+
+        # ENV.__init__(self, True)
+        # print("Warning, Overriding TRUE EXPERT, remove for meta-training")
+        ENV.__init__(self, False)
+        print("Not using experts, in for meta-training... \n")
+
         self.set_visibles()
         self.options = DrawOptions()
         self.tmp_trans = dict(
@@ -173,10 +183,12 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
         self.trajectory = {}
         self.trajectory['observations'] = [] #.append(obs)
         self.trajectory['actions'] = [] #.append(action_raw)
-        self.trajectory['next_observatios'] = [] #.append(next_obs)
+        self.trajectory['next_observations'] = [] #.append(next_obs)
         self.trajectory['rewards'] = [] #.append(r)
-        self.trajectory['done'] = [] #.append(d)
-        self.trajectory['belief'] = [] #.append("Not Done")
+        self.trajectory["terminals"] = []
+        self.trajectory["agent_infos"] = []
+        self.trajectory["env_infos"] = []
+        self.trajectory['belief'] = [] 
 
     def run_policy(self, agent):
         self.set_visible(visible = True)
@@ -238,9 +250,11 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
         obs, action_raw, r, next_obs, d = transition
         self.trajectory['observations'].append(obs)
         self.trajectory['actions'].append(action_raw)
-        self.trajectory['next_observatios'].append(next_obs)
+        self.trajectory['next_observations'].append(next_obs)
         self.trajectory['rewards'].append(r)
-        self.trajectory['done'].append(d)
+        self.trajectory['terminals'].append(d)
+        self.trajectory['agent_infos'].append(0),
+        self.trajectory['env_infos'].append(0),
 
     def infer_belief(self, agent, infer = True, prior = False):
         aux_posterior, sampled_belief, belief = None, None, None
@@ -312,17 +326,58 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
         self.rollout_counter += 1
         self.traj_rollout_counter += 1
 
+    def expert_rollout_update(self, dt, agent, max_steps):
+        if self.rollout_counter == 0:
+            self.trajectories = []
+            self.init_trajectory()
+        else:
+            if self.traj_rollout_counter%max_steps == 0 and self.traj_rollout_counter > 0:
+                self.save_current_trajectory()
+                self.finish_rollout()
+                return
+
+        obs = np.array(self.robos[self.task_idx].get_obs()) 
+        obs_ = norm_pos(self.GOALS[self.task_idx]) - Vec2d(obs[0], obs[1])
+        obs_ = np.array([obs_[0], obs_[1], obs[2], obs[3]])
+
+        action_raw = agent.get_action(obs)
+
+        next_o, r, d, _ = self.step(action_raw)
+        next_o_ = norm_pos(self.GOALS[self.task_idx]) - Vec2d(next_o[0], next_o[1])
+        next_o_ = np.array([next_o_[0], next_o_[1], next_o[2], next_o[3]])
+
+        if d:
+            r_ = 1
+        else:
+            r_ = 0
+        self.save_transition(tuple((obs_, action_raw, r_, next_o_, d)))
+
+        if d:
+            self.save_current_trajectory()
+            self.finish_rollout()
+        self.rollout_counter += 1
+        self.traj_rollout_counter += 1
+
     def view_rollout(self, agent, accum_context, max_steps, sparse_rewards = False, continuous_update = False):
         self.traj_rollout_counter = 0
         print("Speeding out DT by factor 5")
         pyglet.clock.schedule_interval(self.rollout_update, DT/5, agent, accum_context, max_steps, sparse_rewards, continuous_update)
         pyglet.app.run()
 
+    def view_expert_rollout(self, agent, max_steps):
+        self.traj_rollout_counter = 0
+        print("Speeding out DT by factor 10")
+        pyglet.clock.schedule_interval(self.expert_rollout_update, DT/10, agent, max_steps)
+        pyglet.app.run()
+
     def finish_rollout(self):
         print("Ending Task ... \n")
         # if not self.continuous_update:
         pyglet.app.exit()
-        pyglet.clock.unschedule(self.rollout_update)
+        if not self.expert:
+            pyglet.clock.unschedule(self.rollout_update)
+        else:
+            pyglet.clock.unschedule(self.expert_rollout_update)
 
     def render(self):
         pyglet.app.run()
