@@ -104,7 +104,9 @@ def rollout(env, agent,
         o = next_o
         env_infos.append(env_info)
         if d:
-            print(f"Reached Goal at path length {path_length}")
+            if path_length < 25:
+                pass
+                # print(f"Reached Goal at path length {path_length}")
             break
 
     if animated:
@@ -205,7 +207,9 @@ def rollout_window(env, agent,
         env_infos.append(env_info)
 
         if d:
-            print(f"Reached Goal at path length {path_length}")
+            if path_length < 25:
+                pass
+                # print(f"Reached Goal at path length {path_length}")
             break
 
         if path_length%context_window_length is 0:
@@ -331,7 +335,9 @@ def expert_rollout(env, agent,
         o = next_o
         env_infos.append(env_info)
         if d:
-            print(f"Reached Goal at path length {path_length}")
+            if path_length < 25:
+                pass
+                # print(f"Reached Goal at path length {path_length}")
             break
     
     if animated:

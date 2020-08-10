@@ -89,7 +89,7 @@ log_dir = 'runs/{}_SAC_{}_{}_{}'.format(datetime.datetime.now().strftime("%Y-%m-
 writer = SummaryWriter(logdir=log_dir)
 
 # training
-if __name__ == "main":
+if __name__ == "__main__":
     RL_trainer = MultiTaskRLAlgorithm(env, agent, **variant['algorithm_kwargs']) 
     RL_trainer.train(writer)
 
@@ -200,15 +200,20 @@ if __name__ == "main":
 #                      num_demos, 
 #                      view = True, 
 #                      visible = True)
-#     from envs.MetaPeg2D import denorm_pos, norm_pos
+#     demo_paths = dict(Peg2D = all_paths)
+#     import pickle
+#     with open('expert/Peg2D/ExpertPeg2DPaths.pickle', 'wb') as handle:
+#         pickle.dump(demo_paths, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+############
+# DEPRECATED
+############
+
+#from envs.MetaPeg2D import denorm_pos, norm_pos
 #     from pymunk import Vec2d
 #     for path in all_paths:
 #         for demo in path:
 #             for obs, nobs in zip(demo['observations'], demo['next_observations']):
 #                 obs[0], obs[1] = demo['goal_pos'] - denorm_pos(Vec2d(obs[0], obs[1]))
 #                 nobs[0], nobs[1] = demo['goal_pos'] - denorm_pos(Vec2d(nobs[0], nobs[1]))
-#     demo_paths = dict(
-#                 Peg2D = all_paths)
-#     import pickle
-#     with open('expert/Peg2D/ExpertPeg2DPaths.pickle', 'wb') as handle:
-#         pickle.dump(demo_paths, handle, protocol=pickle.HIGHEST_PROTOCOL)

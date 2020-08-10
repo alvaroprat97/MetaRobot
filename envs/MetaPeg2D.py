@@ -25,6 +25,7 @@ WINDOW_X = 1280
 WINDOW_Y = 720
 ORIGIN = (200, 360) # Robot gripper origin
 PEG_DEPTH = 200
+PEG_GIRTH = 40
 DT = 1/5
 GOAL = Vec2d(1000, 300)
 
@@ -42,8 +43,12 @@ class StaticEnvironment(object):
         self.sprites = sprites
         self.space = space
         self.GOAL = GOAL
+        self.ORIGIN = ORIGIN
+        self.PEG_DEPTH = PEG_DEPTH
+        self.PEG_GIRTH = PEG_GIRTH
+        self.tmp_GOAL = None
+        self.env_statics = []
         self.make_static_env()
-        
 
     def add_static_segment(self, position, endpoint_e, radius = 3.0, elasticity = 0.8, friction = 0.7):
         """
@@ -64,28 +69,73 @@ class StaticEnvironment(object):
         segment_shape.elasticity = elasticity
         segment_shape.friction = friction
         segment_shape.set_neighbors(endpoint_e, position)
-
+        self.env_statics.append(segment_shape)
         self.space.add(segment_shape)
 
-    def make_static_env(self):
+    def alter_task(self, alterations = None):
+        """
+        Modify task by some extent. 
+        This is performed in evaluation (usually) in order to see if it overfits to the demonstration or not.
+        If performed during meta-training then this would be "LEARNING FROM IMPERFECT DEMONSTRATIONS"
+        """
+        # Remove shapes from body
+        for shape in self.space.shapes:
+            self.space.remove(shape)
+        for constraint in self.space.constraints:
+            self.space.remove(constraint)
+
+        self.env_statics = []
+        if alterations is None:
+            alterations = dict(
+                peg_pos_x = (np.random.rand()-0.5)*self.GOAL.x/20,
+                peg_pos_y = (np.random.rand()-0.5)*self.GOAL.y/10,
+                peg_width = (np.random.rand()-0.5)*PEG_GIRTH/5,
+                peg_depth = (np.random.rand()-0.5)*PEG_DEPTH/10,
+                theta = 0.0 #(np.random.rand() - 0.5), 
+                # ORIGIN = Vec2d((np.random.rand()-0.5)*self.GOAL.x/10,(np.random.rand()-0.5)*self.GOAL.x/10),
+            )
+        self.make_static_env(alterations = alterations)
+        # Modify goal pos (x,y) by a noisy amount.
+        # Modify the goal angle (theta) by a noisy amount. 
+        # Modify the peg geometry (width) by a noisy amount.
+
+    def make_static_env(self, alterations = None):
         """
         seg_list is a list of tuples containing args for add_static_segment
+        settings is a hard-coded dictionary of task descriptors.
         """
-
         # Static Coordinates for peg
-        peg_pos_x = self.GOAL.x
-        mid_frame = self.GOAL.y
-        peg_girth = 40
-        peg_depth = PEG_DEPTH
+        if alterations is None:
+            peg_pos_x = self.GOAL.x 
+            mid_frame = self.GOAL.y
+            peg_girth = PEG_GIRTH
+            peg_depth = PEG_DEPTH
+            theta = 0.0 #(np.random.rand() - 0.5)/2
+            # ORIGIN = self.ORIGIN
+        else:
+            print("Altering the task...")
+            peg_pos_x = self.GOAL.x + alterations['peg_pos_x']
+            mid_frame = self.GOAL.y + alterations['peg_pos_y']
+            peg_girth = PEG_GIRTH + alterations['peg_width']
+            peg_depth = PEG_DEPTH + alterations['peg_depth']
+            theta = 0.0 + alterations['theta']
+            # ORIGIN = self.ORIGIN + alterations['ORIGIN']
         thresh = 1000
 
+        len_peg_y = peg_depth*np.sin(theta)
+        len_peg_x = peg_depth*np.cos(theta)
+
         seg_list = [(Vec2d(peg_pos_x,0 - thresh),Vec2d(0,mid_frame - peg_girth//2 + thresh)),
-                     (Vec2d(peg_pos_x,mid_frame - peg_girth//2),Vec2d(peg_depth,0)),
-                     (Vec2d(peg_pos_x + peg_depth,mid_frame - peg_girth//2),Vec2d(0,peg_girth)),
-                     (Vec2d(peg_pos_x + peg_depth,mid_frame + peg_girth//2),Vec2d(-peg_depth,0)),
+                     (Vec2d(peg_pos_x,mid_frame - peg_girth//2),Vec2d(len_peg_x,len_peg_y)),
+                     (Vec2d(peg_pos_x + len_peg_x,mid_frame + len_peg_y- peg_girth//2),Vec2d(0,peg_girth)),
+                     (Vec2d(peg_pos_x + len_peg_x,mid_frame +len_peg_y+ peg_girth//2),Vec2d(-len_peg_x,-len_peg_y)),
                      (Vec2d(peg_pos_x,mid_frame + peg_girth//2),Vec2d(0,thresh + WINDOW_Y - mid_frame - peg_girth//2))]
 
         self.goal_pos = Vec2d(peg_pos_x, mid_frame)
+        self.GOAL = self.goal_pos
+        self.PEG_DEPTH = peg_depth
+        self.PEG_GIRTH = peg_girth
+        # self.ORIGIN = ORIGIN
 
         for segment in seg_list:
             self.add_static_segment(*segment)
@@ -121,8 +171,9 @@ class RobotEnvironment(object):
     def __init__(self, space, arm_lengths = [250, 200, 200], radii = [5, 5, 10], GOAL = (1000, 400), expert = False):
         self.space = space
         self.GOAL = GOAL
+        self.ORIGIN = ORIGIN
         self.PivotPoints = [None]*(1+len(arm_lengths))
-        self.PivotPoints[0] = (ORIGIN,0)
+        self.PivotPoints[0] = (self.ORIGIN,0)
         self.Arms = Arms(arm_lengths, radii = radii)
         self.range_multiplier = 5
         self.set_action_range(vals = [(2, 20), (1, np_pi/16)]) # 2 Velocities and 1 angular velocity
@@ -168,8 +219,8 @@ class RobotEnvironment(object):
                 len_x += length*cos(rand_angle)
                 len_y += length*sin(rand_angle)
                 self.Arms.pos[idx] = (length, rand_angle)
-            if (50 < ( self.GOAL.x - ORIGIN[0] - len_x) < 250 and 
-                 abs(len_y + ORIGIN[1] - self.GOAL.y) < 100):
+            if (50 < ( self.GOAL.x - self.ORIGIN[0] - len_x) < 250 and 
+                 abs(len_y + self.ORIGIN[1] - self.GOAL.y) < 100):
                 got = True
                 if iterator > 1000:
                     print(f"Got at {iterator}")
@@ -186,7 +237,7 @@ class RobotEnvironment(object):
         self.arm_vector_curr = Vec2d((arm_data[0]*cos(arm_data[1]), arm_data[0]*sin(arm_data[1])))
         self.Arms.arm_vecs[idx] = self.arm_vector_curr
         if idx is 0:
-            self.point_a = ORIGIN
+            self.point_a = self.ORIGIN
         else:
             self.point_a = self.point_b
         self.point_b = self.point_a + self.arm_vector_curr
@@ -325,7 +376,7 @@ class RobotEnvironment(object):
         return p1*(action-p2)
 
     def get_peg_tip(self):
-        peg_tip = Vec2d(ORIGIN) if isinstance(ORIGIN, tuple) else ORIGIN
+        peg_tip = Vec2d(self.ORIGIN) if isinstance(self.ORIGIN, tuple) else self.ORIGIN
         lengths = self.Arms.lengths
         idx = 0
         for body in self.bodies:
@@ -352,6 +403,7 @@ class RobotEnvironment(object):
         peg_ = norm_pos(peg)
         # Expert case, use relative distance to the goal.
         if self.expert:
+            # print("Expert Active")
             peg_ = norm_pos(self.GOAL - peg) 
 
         self.obs = [peg_.x, peg_.y, np.cos(true_angle), np.sin(true_angle)]
@@ -569,20 +621,6 @@ class Frontend(pyglet.window.Window):
             action = np.random.sample(3)*2-1
             self.robo.action_buffered = self.robo.denorm_action(action)
 
-        v = np.pi/64
-        if symbol == pyglet.window.key.Q:
-            bodies[-1].angular_velocity = v
-        if symbol == pyglet.window.key.A:
-            bodies[-1].angular_velocity = v
-        if symbol == pyglet.window.key.W:
-            bodies[-2].angular_velocity = v
-        if symbol == pyglet.window.key.S:
-            bodies[-2].angular_velocity = v
-        if symbol == pyglet.window.key.E:
-            bodies[-1].angular_velocity = v
-        if symbol == pyglet.window.key.D:
-            bodies[-1].angular_velocity = v
-
         c = 10
         if symbol == pyglet.window.key.UP:
             bodies[-1].velocity += Vec2d(0,c)
@@ -592,6 +630,9 @@ class Frontend(pyglet.window.Window):
             bodies[-1].velocity -= Vec2d(c,0)
         if symbol == pyglet.window.key.RIGHT:
             bodies[-1].velocity += Vec2d(c,0)
+
+        if symbol == pyglet.window.key.S:
+            self.env.alter_task()
 
         if symbol == pyglet.window.key.R:
             self.reset()

@@ -95,6 +95,8 @@ class MultiTaskRLAlgorithm(object):
                                                             )
             num_transitions += n_samples
             if not deterministic:
+                for path in paths:
+                    path['context'] = [None]*len(path['terminals'])
                 self.replay_buffer.add_paths(self.task_idx, paths)
 
         self._n_env_steps_total += num_transitions

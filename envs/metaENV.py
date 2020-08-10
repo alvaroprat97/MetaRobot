@@ -40,9 +40,7 @@ class ENV(object):
 
             static = StaticEnvironment(space, GOAL = GOAL)
             self.statics.append(static)
-
             robo = RobotEnvironment(space, arm_lengths= arm_lengths, radii = [5, 7, 10], GOAL=GOAL, expert = expert)
-
             self.robos.append(robo)
 
             del space, static, robo
@@ -75,7 +73,7 @@ class ENV(object):
         raise Exception(NotImplemented)     
         
     def _get_obs(self, idx = 0):
-        data = self.robos[idx].get_obs() # if not self.expert else self.robos[idx].get_obs(self.GOALS[idx])  
+        data = self.robos[idx].get_obs()  
         # GET DATA FROM SIMULATION ENVIRONMENT
         # RETURN OBSERVATION DIMENSION
         return data
@@ -86,23 +84,37 @@ class ENV(object):
         else:
             return self.GOALS[idx]
 
+    def alter_task(self, alteration = None):
+               # Remove shapes from body
+        prev_goal = self.GOALS[self.task_idx]
+        self.statics[self.task_idx].alter_task(alteration)
+        self.robos[self.task_idx].init_arms()
+        self.robos[self.task_idx].init_robot()
+        self.robos[self.task_idx].point_b, self.robos[self.task_idx].point_a = None, None
+        self.robos[self.task_idx].GOAL = self.statics[self.task_idx].GOAL
+        print(f"Altering task {self.task_idx}, setting new GOAL {self.statics[self.task_idx].GOAL} from {prev_goal}")
+
     def reset(self):
         idx = self.task_idx
         self.robos[idx].reset_bodies(random_reset = True)
         obs = self.robos[idx].get_obs() #if not self.expert else self.robos[idx].get_obs(self.GOALS[idx])
         return obs
 
-    def reset_tasks(self, idxs):
+    def reset_tasks(self, idxs, noisy = False):
         obs = []
         for idx in idxs:
+            if noisy:
+                self.statics[idx].alter_task(alterations=None)
             self.robos[idx].reset_bodies(random_reset = True)
             o_ = self.robos[idx].get_obs() #if not self.expert else self.robos[idx].get_obs(self.GOALS[idx])
             obs.append(o_)
         self.encountered = 0
         return obs
 
-    def reset_task(self, idx):
+    def reset_task(self, idx, noisy = False):
         self.robos[idx].reset_bodies(random_reset = True)
+        if noisy:
+            self.statics[idx].alter_task()
         self.encountered = 0
         return self.robos[idx].get_obs() #if not self.expert else self.robos[idx].get_obs(self.GOALS[idx])
 
@@ -133,18 +145,19 @@ class ENV(object):
                 self.spaces[self.task_idx].step(dt/20)
 
     def reward_func(self, obs):
-
+    
         mask = False
-        peg_tip = self.robos[self.task_idx].get_peg_tip()
+        peg_tip = denorm_pos(Vec2d(obs[0], obs[1])) if not self.expert else self.robos[self.task_idx].get_peg_tip()
+
         goal_offset = 20
 
-        rpos_x = (self.GOALS[self.task_idx].x + PEG_DEPTH - peg_tip.x)/WINDOW_X
-        rpos_y = (self.GOALS[self.task_idx].y - peg_tip.y)/WINDOW_Y
+        rpos_x = (self.statics[self.task_idx].GOAL.x + self.statics[self.task_idx].PEG_DEPTH - peg_tip.x)/WINDOW_X
+        rpos_y = (self.statics[self.task_idx].GOAL.y - peg_tip.y)/WINDOW_Y
 
         reward = -Vec2d(rpos_x, rpos_y).length + 0.1*(obs[-2])*abs(obs[-2]) - 0.1
         # reward = np.clip(reward,-np.inf,0)
 
-        if peg_tip.x > self.GOALS[self.task_idx].x + PEG_DEPTH - goal_offset:
+        if peg_tip.x > self.statics[self.task_idx].GOAL.x + self.statics[self.task_idx].PEG_DEPTH - goal_offset:
             # reward = 1
             self.encountered += 1
             mask = True
@@ -161,9 +174,9 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # ENV.__init__(self, True)
+        # ENV.__init__(self, expert = True)
         # print("Warning, Overriding TRUE EXPERT, remove for meta-training")
-        ENV.__init__(self, False)
+        ENV.__init__(self, expert = False)
         print("Not using experts, in for meta-training... \n")
 
         self.set_visibles()
@@ -273,7 +286,7 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
     def save_current_trajectory(self):
         self.trajectory['rollout_length'] = self.traj_rollout_counter
         self.trajectory['task_idx'] = self.task_idx
-        self.trajectory['goal_pos'] = self.GOALS[self.task_idx]
+        self.trajectory['goal_pos'] = self.statics[self.task_idx].GOAL
         self.trajectories.append(self.trajectory)
         # Reset the trajectories
         self.traj_rollout_counter = 0
@@ -337,19 +350,21 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
                 return
 
         obs = np.array(self.robos[self.task_idx].get_obs()) 
-        obs_ = norm_pos(self.GOALS[self.task_idx]) - Vec2d(obs[0], obs[1])
+        obs_ = norm_pos(self.GOALS[self.task_idx] - denorm_pos(Vec2d(obs[0], obs[1])))
         obs_ = np.array([obs_[0], obs_[1], obs[2], obs[3]])
 
         action_raw = agent.get_action(obs)
 
         next_o, r, d, _ = self.step(action_raw)
-        next_o_ = norm_pos(self.GOALS[self.task_idx]) - Vec2d(next_o[0], next_o[1])
+        next_o_ = norm_pos(self.GOALS[self.task_idx] - denorm_pos(Vec2d(next_o[0], next_o[1])))
         next_o_ = np.array([next_o_[0], next_o_[1], next_o[2], next_o[3]])
 
-        if d:
-            r_ = 1
-        else:
-            r_ = 0
+        # if d:
+        #     r_ = 1
+        # else:
+        #     r_ = 0
+        r_ = r
+
         self.save_transition(tuple((obs_, action_raw, r_, next_o_, d)))
 
         if d:
@@ -447,19 +462,8 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
             action = np.random.sample(3)*2-1
             self.robos[self.task_idx].action_buffered = self.robos[self.task_idx].denorm_action(action)
 
-        v = np.pi*10/16
-        if symbol == key.Q:
-            bodies[-1].angular_velocity += v
-        if symbol == key.A:
-            bodies[-1].angular_velocity -= v
-        if symbol == key.W:
-            bodies[-2].angular_velocity += v
         if symbol == key.S:
-            bodies[-2].angular_velocity -= v
-        if symbol == key.E:
-            bodies[-1].angular_velocity += v
-        if symbol == key.D:
-            bodies[-1].angular_velocity -= v
+            self.alter_task(None)
 
         c = 100
         if symbol == key.UP:
@@ -485,8 +489,7 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
 
     def on_mouse_press(self, x, y, button, modifier):
         print(self.reward_func(self._get_obs(self.task_idx)))
-        print(norm_pos(Vec2d(x,y)))
-        # print(self._get_obs(self.task_idx))
+        print(self._get_obs(self.task_idx))
         # print(self.spaces[self.task_idx].bodies[-1].velocity)
         point_q = self.spaces[self.task_idx].point_query_nearest((x,y), 0, pymunk.ShapeFilter())
         if point_q:

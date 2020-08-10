@@ -43,7 +43,7 @@ def deep_update_dict(fr, to):
 
 def experiment(variant):
 
-    log_dir = variant['util_params']['run_dir'] + "runs/{}_{}".format(datetime.datetime.now().strftime("%d_%H"),
+    log_dir = variant['util_params']['run_dir'] + "runs/{}_{}".format(datetime.datetime.now().strftime("%d_%H_%m"),
                                         "PEARL")
     writer = SummaryWriter(logdir=log_dir)
 
@@ -112,44 +112,6 @@ def experiment(variant):
         action_dim=action_dim,
     )
 
-    # Xplor
-    # xplor_qf1 = xplor_qf2 = xplor_vf = xplor_policy = None
-    # if variant['decoupled_config']['use']:
-    #     xplor_qf1 = FlattenMlp(
-    #         hidden_sizes=[net_size, net_size, net_size],
-    #         input_size=obs_dim + action_dim + latent_dim,
-    #         output_size=1,
-    #     )
-    #     xplor_qf2 = FlattenMlp(
-    #         hidden_sizes=[net_size, net_size, net_size],
-    #         input_size=obs_dim + action_dim + latent_dim,
-    #         output_size=1,
-    #     )
-    #     xplor_vf = FlattenMlp(
-    #         hidden_sizes=[net_size, net_size, net_size],
-    #         input_size=obs_dim + latent_dim,
-    #         output_size=1,
-    #     )
-    #     xplor_policy = TanhGaussianPolicy(
-    #         hidden_sizes=[net_size, net_size, net_size],
-    #         obs_dim=obs_dim + latent_dim,
-    #         latent_dim=latent_dim,
-    #         action_dim=action_dim,
-    #     )
-    # print("TanhGaussianLSTMPolicy() not implemented yet... \n")
-
-    # Dual Agents
-    # xplor_agent = None
-    # if variant['decoupled_config']['use']:
-    #     xplor_agent = PEARLAgent(
-    #         xplor_policy,
-    #         context_encoder=context_encoder,
-    #         aux_decoder=aux_decoder,
-    #         aux_params = variant['aux_params'],
-    #         latent_dim=latent_dim,  
-    #         **variant['algo_params']
-    #     )
-
     agent = PEARLAgent(
         policy,
         context_encoder=context_encoder,
@@ -159,8 +121,6 @@ def experiment(variant):
         **variant['algo_params']
     )
     nets = [agent, qf1, qf2, vf] 
-    # if variant['decoupled_config']['use'] is True:
-        # nets += [xplor_agent, xplor_qf1, xplor_qf2, xplor_vf]
     nets.append(context_encoder)
     if aux_decoder is not None:
         nets.append(aux_decoder)
@@ -213,14 +173,7 @@ def experiment(variant):
         pickle_dir = experiment_log_dir + '/eval_trajectories'
         pathlib.Path(pickle_dir).mkdir(parents=True, exist_ok=True)
 
-    if variant['modality'] is 'train':
-        # run the algorithm
-        if isinstance(writer, SummaryWriter):
-            algorithm.writer = writer
-        algorithm.train()
-    elif variant['modality'] is 'test':
-        raise Exception("This implementation is not complete ... \n")
-
+    algorithm.train()
     writer.close()
 
 def run():
