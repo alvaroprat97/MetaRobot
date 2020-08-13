@@ -42,10 +42,15 @@ class StaticEnvironment(object):
     def __init__(self, space, GOAL, sprites = None):
         self.sprites = sprites
         self.space = space
-        self.GOAL = GOAL
         self.ORIGIN = ORIGIN
+        self.GOAL = GOAL
+        self.tmp_GOAL = GOAL
         self.PEG_DEPTH = PEG_DEPTH
+        self.tmp_PEG_DEPTH = PEG_DEPTH
         self.PEG_GIRTH = PEG_GIRTH
+        self.tmp_PEG_GIRTH = PEG_GIRTH
+        self.theta = 0.0
+        self.tmp_theta = 0.0
         self.tmp_GOAL = None
         self.env_statics = []
         self.make_static_env()
@@ -89,9 +94,9 @@ class StaticEnvironment(object):
             alterations = dict(
                 peg_pos_x = (np.random.rand()-0.5)*self.GOAL.x/20,
                 peg_pos_y = (np.random.rand()-0.5)*self.GOAL.y/10,
-                peg_width = (np.random.rand()-0.5)*PEG_GIRTH/5,
-                peg_depth = (np.random.rand()-0.5)*PEG_DEPTH/10,
-                theta = 0.0 #(np.random.rand() - 0.5), 
+                peg_width = (np.random.rand()-0.5)*self.PEG_GIRTH/5,
+                peg_depth = (np.random.rand()-0.5)*self.PEG_DEPTH/10,
+                theta = (np.random.rand() - 0.5)/2, 
                 # ORIGIN = Vec2d((np.random.rand()-0.5)*self.GOAL.x/10,(np.random.rand()-0.5)*self.GOAL.x/10),
             )
         self.make_static_env(alterations = alterations)
@@ -108,17 +113,17 @@ class StaticEnvironment(object):
         if alterations is None:
             peg_pos_x = self.GOAL.x 
             mid_frame = self.GOAL.y
-            peg_girth = PEG_GIRTH
-            peg_depth = PEG_DEPTH
-            theta = 0.0 #(np.random.rand() - 0.5)/2
+            peg_girth = self.PEG_GIRTH
+            peg_depth = self.PEG_DEPTH
+            theta = self.theta #(np.random.rand() - 0.5)/2
             # ORIGIN = self.ORIGIN
         else:
-            print("Altering the task...")
+            # print("Altering the task...")
             peg_pos_x = self.GOAL.x + alterations['peg_pos_x']
             mid_frame = self.GOAL.y + alterations['peg_pos_y']
-            peg_girth = PEG_GIRTH + alterations['peg_width']
-            peg_depth = PEG_DEPTH + alterations['peg_depth']
-            theta = 0.0 + alterations['theta']
+            peg_girth = self.PEG_GIRTH + alterations['peg_width']
+            peg_depth = self.PEG_DEPTH + alterations['peg_depth']
+            theta = self.theta + alterations['theta']
             # ORIGIN = self.ORIGIN + alterations['ORIGIN']
         thresh = 1000
 
@@ -132,9 +137,10 @@ class StaticEnvironment(object):
                      (Vec2d(peg_pos_x,mid_frame + peg_girth//2),Vec2d(0,thresh + WINDOW_Y - mid_frame - peg_girth//2))]
 
         self.goal_pos = Vec2d(peg_pos_x, mid_frame)
-        self.GOAL = self.goal_pos
-        self.PEG_DEPTH = peg_depth
-        self.PEG_GIRTH = peg_girth
+        self.tmp_GOAL = self.goal_pos
+        self.tmp_PEG_DEPTH = peg_depth
+        self.tmp_PEG_GIRTH = peg_girth
+        self.tmp_theta = theta
         # self.ORIGIN = ORIGIN
 
         for segment in seg_list:
@@ -171,6 +177,7 @@ class RobotEnvironment(object):
     def __init__(self, space, arm_lengths = [250, 200, 200], radii = [5, 5, 10], GOAL = (1000, 400), expert = False):
         self.space = space
         self.GOAL = GOAL
+        self.tmp_GOAL = GOAL
         self.ORIGIN = ORIGIN
         self.PivotPoints = [None]*(1+len(arm_lengths))
         self.PivotPoints[0] = (self.ORIGIN,0)
@@ -219,8 +226,8 @@ class RobotEnvironment(object):
                 len_x += length*cos(rand_angle)
                 len_y += length*sin(rand_angle)
                 self.Arms.pos[idx] = (length, rand_angle)
-            if (50 < ( self.GOAL.x - self.ORIGIN[0] - len_x) < 250 and 
-                 abs(len_y + self.ORIGIN[1] - self.GOAL.y) < 100):
+            if (50 < ( self.tmp_GOAL.x - self.ORIGIN[0] - len_x) < 250 and 
+                 abs(len_y + self.ORIGIN[1] - self.tmp_GOAL.y) < 100):
                 got = True
                 if iterator > 1000:
                     print(f"Got at {iterator}")

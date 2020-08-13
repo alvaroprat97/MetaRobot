@@ -57,6 +57,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
             render_eval_paths=False,
             dump_eval_paths=False,
             plotter=None,
+            imperfect_demo = False,
     ):
         """
         :param env: training env
@@ -104,6 +105,7 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
         self.write = False
         writer = self.writer
         self.write = True if isinstance(writer, SummaryWriter) else False
+        self.imperfect_demo = imperfect_demo
         self.decoupled = True if isinstance(self.agent, dict) else False
         
         # Demos
@@ -222,7 +224,10 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                     self.task_idx = idx
                     self.env.set_task_idx(idx)
                     # Collect on actor buffer B
-                    self.env.reset_task(idx)
+                    if self.imperfect_demo:
+                        self.env.alter_task(idx)
+                    else:
+                        self.env.reset_task(idx)
                     self.collect_data(num_samples = self.num_initial_steps, 
                                     resample_z_rate = 1, 
                                     update_posterior_rate = np.inf, 
@@ -242,7 +247,10 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                 self.task_idx = idx
                 self.env.set_task_idx(idx)
                 # Reset the task environment & buffers for the randomly selected task
-                self.env.reset_task(idx)
+                if self.imperfect_demo:
+                    self.env.alter_task(idx)
+                else:
+                    self.env.reset_task(idx)
                 # Clear the encoder for task idx and keep the demonstrations
                 self.enc_replay_buffer.task_buffers[idx].clear()
 
@@ -251,11 +259,11 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
                 if self.num_steps_prior > 0:
                     # print("Collecting Prior")
                     self.collect_data(self.num_steps_prior, 1, np.inf,
-                                        clean_prior = False, add_to_demos = False) #
+                                        clean_prior = True, add_to_demos = False) #
                 # collect some trajectories with z ~ posterior. We update the posterior of z. 
                 if self.num_steps_posterior > 0:
                     # print("Collecting Semi-Posterior")
-                    self.collect_data(self.num_steps_posterior, 1, self.update_post_train,
+                    self.collect_data(self.num_steps_posterior, 1, np.inf,
                                         clean_prior = False, add_to_demos = True)
                 # even if encoder is trained only on samples from the prior, the policy needs to learn to handle z ~ posterior 
                 # not used for encoder training
@@ -363,10 +371,10 @@ class MetaRLAlgorithm(metaclass=abc.ABCMeta):
             if add_to_demos:
                 for path in paths:
                     if self.demo_criterion(path):
-                        print("Extending Demos ...")
                         # Sparsify rewards for the context encoder
                         path['rewards'] = np.array([[int(x) for x in path['terminals'].flatten()]]).T
                         self.demo_buffer.add_path(self.task_idx, path)
+                        print(f"Extending Demos on task {self.task_idx} to {self.demo_buffer.task_buffers[self.task_idx].num_episode_starts()}")
 
             if update_posterior_rate != np.inf:
                 if post_from_demos:

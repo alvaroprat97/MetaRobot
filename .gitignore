@@ -1,7 +1,10 @@
 /**/.ipynb_checkpoints
 /**/*.pyc
 /**/logs/
+/**/env/
 /**/output/
 /**/runs/
 /**/__pycache__/
 /**/*.torch
+/**/.env
+sandbox

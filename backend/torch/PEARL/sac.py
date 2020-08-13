@@ -237,14 +237,15 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         unpacked = [torch.cat(x, dim=0) for x in unpacked]
         return unpacked
 
-    def sample_context(self, indices, demos = False, batch_size = None, unpacked = False):
+    def sample_context(self, indices, demos = False, batch_size = None, unpacked = False, entire_traj = False):
         ''' sample batch of context from a list of tasks from the replay buffer '''
         # make method work given a single task index
         if not hasattr(indices, '__iter__'):
             indices = [indices]
+        sequence = True if self.recurrent or entire_traj else False
         buffer = self.demo_buffer if demos else self.enc_replay_buffer  
         batch_size = self.embedding_batch_size if batch_size is None else batch_size
-        batches = [ptu.np_to_pytorch_batch(buffer.random_batch(idx, batch_size=batch_size, sequence=self.recurrent)) for idx in indices]
+        batches = [ptu.np_to_pytorch_batch(buffer.random_batch(idx, batch_size=batch_size, sequence=sequence)) for idx in indices]
         context = [self.unpack_batch(batch, sparse_reward=self.sparse_rewards) for batch in batches]
         # group like elements together
         context = [[x[i] for x in context] for i in range(len(context[0]))]
@@ -315,7 +316,10 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         # This context must be representative of that context used to generate the trajectories.
         context_batch = self.sample_context(indices, demos = False)
         demos_context = self.sample_context(indices, demos = True)
-        context = torch.cat([context_batch, demos_context], dim = 1)
+            # BEFORE
+        # context = torch.cat([context_batch, demos_context], dim = 1)
+            # NOW
+        context = context_batch
 
         # zero out context and hidden encoder state
         # self.agent.demo_clear_z(context,num_tasks=len(indices))
@@ -354,9 +358,9 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         r = rewards[:,:,idx]
         no = next_obs[:,:,idx]
         if self.use_next_obs_in_context:
-            data = torch.cat([o, a, r, no], dim=2)#.unsqueeze(1)
+            data = torch.cat([o, a, r, no], dim=2)
         else:
-            data = torch.cat([o, a, r], dim=2)#.unsequeeze(1)
+            data = torch.cat([o, a, r], dim=2)
         x_ = torch.cat([context, data], dim=1)   
         return x_
 
@@ -447,7 +451,6 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         mean_reg_loss = self.policy_mean_reg_weight * (policy_mean**2).mean()
         std_reg_loss = self.policy_std_reg_weight * (policy_log_std**2).mean()
         policy_reg_loss = mean_reg_loss + std_reg_loss # RegRession loss (Tanh)
-        # TODO all L2 Loss
 
         policy_loss = policy_loss + policy_reg_loss
         self.pretrain_policy_optimizer.zero_grad()
@@ -475,6 +478,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         demo_obs, demo_actions, _, _ = self.sample_context(indices, demos= True, unpacked=True) 
         
         aux_targets = self.env._get_targets(indices)
+        demo_targets = self.env._get_targets(indices, altered = True)
         # Get auxilliary targets in tensor format
         t, b, _ = obs.size()
         assert t == num_tasks 
@@ -483,7 +487,7 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
         targets = torch.stack(targets)
         demo_t, demo_b, _ = demo_obs.size()
         assert demo_t == num_tasks
-        demo_targets = [list(torch.tensor(tuple(aux_targets[i])*demo_b, device = ptu.device).split(len(aux_targets[i]))) for i in range(len(indices))]
+        demo_targets = [list(torch.tensor(tuple(demo_targets[i])*demo_b, device = ptu.device).split(len(aux_targets[i]))) for i in range(len(indices))]
         demo_targets = list(itertools.chain(*demo_targets))    
         demo_targets = torch.stack(demo_targets)
 
@@ -535,15 +539,11 @@ class PEARLSoftActorCritic(MetaRLAlgorithm):
 
         # Auxilliary decoder optimisation & gradient flow to encoder (optional, currently no gradient backprop to encoder model)
         self.aux_optimizer.zero_grad()
-        aux_loss = -(self.aux_lambda/2)*torch.mean(aux_log_pi.flatten()) 
+        aux_loss = -(self.aux_lambda)*torch.mean(aux_log_pi.flatten()) 
         aux_demo_loss = -self.aux_lambda*torch.mean(demo_aux_log_pi.flatten())
         # Ignoring demo aux losses
-        #TODO 
-        #TODO
-        #TODO WE ONLY CHANGED ADDING AUX_LOSS
-        #TODO 
-        #TODO
-        aux_tot_loss = aux_demo_loss + aux_loss 
+        #TODO WE ONLY CHANGED ADDING AUX_LOSS  
+        aux_tot_loss = aux_loss + aux_demo_loss# + aux_loss 
         aux_tot_loss.backward(retain_graph = not detached_aux)
 
         # qf and encoder update (note encoder does not get grads from policy or vf)

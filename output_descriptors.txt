@@ -1,2 +1,3 @@
 2020_08_08_13_42_38 - Best returns, down to -2.5. Only using Laux_demo. However, Linfo is high and Laux is high which means it might not be that generalisable/adaptable.
 2020_08_08_18_26_12 - Returns down to -4. But really good Linfo of 0.5 and compromise between Laux and Laux_demo which means it is probably more generalisable. 
+2020_08_10_12_54_13 - Returns down to -3. Really good Linfo of 0.2 and compromise between Laux and Laux_demo which means it is probably more generalisable. Based on much more xploratory data.

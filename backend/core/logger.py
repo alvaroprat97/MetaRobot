@@ -256,7 +256,12 @@ def save_weights(weights, names):
     ''' save network weights to given paths '''
     # NOTE: breaking abstraction by adding torch dependence here
     for w, n in zip(weights, names):
-        torch.save(w, n, _use_new_zipfile_serialization=False)
+        try:
+            # print(f"ZipSave {n}")
+            torch.save(w, n, _use_new_zipfile_serialization=False)
+        except:
+            # print(f"NormalSave {n}")
+            torch.save(w, n)
 
 def save_itr_params(itr, params_dict):
     ''' snapshot model parameters '''
