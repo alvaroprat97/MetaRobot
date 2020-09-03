@@ -14,8 +14,9 @@ from tensorboardX import SummaryWriter
 import datetime
 import pickle
 
-from envs.metaENV import ENV, VisualiserWrapper
-from envs.MetaPeg2D import WINDOW_X, WINDOW_Y, ORIGIN, PEG_DEPTH
+# from envs.metaENV import ENV; VisualiserWrapper
+from envs.MultiENV import ENV, VisualiserWrapper
+from envs.utils import WINDOW_X, WINDOW_Y
 from backend.torch.PEARL.policies import TanhGaussianPolicy
 from backend.torch.networks import FlattenMlp, MlpEncoder, RecurrentEncoder, LatentGNNEncoder, NormalAux
 from backend.torch.PEARL.sac import PEARLSoftActorCritic
@@ -44,11 +45,30 @@ def deep_update_dict(fr, to):
 def experiment(variant):
 
     log_dir = variant['util_params']['run_dir'] + "runs/{}_{}".format(datetime.datetime.now().strftime("%d_%H_%m"),
-                                        "PEARL")
+                                        "PEDAL")
     writer = SummaryWriter(logdir=log_dir)
 
-    env = ENV(expert=False)
-    tasks = env.get_all_task_idx()
+    # Instantiate MetaENV
+    # task_families =  ["Reach2D", "Stick2D", "Peg2D", "Stick2Dv", "Peg2Dv"] # MT5
+    # task_families = ['Reach2D', 'Stick2D', 'Peg2D', 'Peg2Dv', 'Stick2Dv', 'Key2D', 'Key2Dv'] # MT7
+    task_families = ['Reach2D', 'Stick2D', 'Peg2D', 'Key2D'] # MT4
+    # task_families = ['Reach2D', 'Stick2D', 'Stick2Dv', 'Peg2D', 'Peg2Dv','Key2D'] # ML6
+    # task_families = ["Key2D", "Reach2D", "Peg2D", "Stick2D"] # MT4 MAX CONV
+    
+    # print("Leaving out Stick2Dv for meta-test adaptation...\n" )
+    env = ENV(expert = False, task_families = task_families, sparse_rewards= True)
+    # tasks = env.get_all_task_idx()
+    train_tasks = []
+    eval_tasks = []
+    num_tasks = len(task_families)
+    num_trains = variant['n_train_tasks']
+    num_evals = variant['n_eval_tasks']
+    for i in range(num_tasks):
+        for j in range((num_trains + num_evals)):
+            if j < num_trains:
+                train_tasks.append(j + i*(num_trains + num_evals))
+            else:
+                eval_tasks.append(j + i*(num_trains + num_evals))
     obs_dim = int(np.prod(env.observation_space.shape))
     action_dim = int(np.prod(env.action_space.shape))
     reward_dim = 1
@@ -62,6 +82,7 @@ def experiment(variant):
     encoder_model = RecurrentEncoder if recurrent else MlpEncoder
 
     # Demos
+    # demos = None
     with open(variant['demo_path'] + '.pickle', 'rb') as handle:
         demos = pickle.load(handle)
 
@@ -126,8 +147,8 @@ def experiment(variant):
         nets.append(aux_decoder)
     algorithm = PEARLSoftActorCritic(
         env=env,
-        train_tasks=list(tasks[:variant['n_train_tasks']]),
-        eval_tasks=list(tasks[-variant['n_eval_tasks']:]),
+        train_tasks=train_tasks,
+        eval_tasks=eval_tasks,
         nets=nets,
         demo_paths=demos,
         decoupled = variant['decoupled_config']['use'],

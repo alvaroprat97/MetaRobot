@@ -1,3 +1,6 @@
+import sys
+sys.path.append("")
+
 import pyglet
 import pymunk
 import pymunkoptions
@@ -20,39 +23,32 @@ import functools
 import torch
 pymunkoptions.options["debug"] = False
 
-# Meta Variables
-WINDOW_X = 1280
-WINDOW_Y = 720
-ORIGIN = (200, 360) # Robot gripper origin
-PEG_DEPTH = 200
-PEG_GIRTH = 40
-DT = 1/5
-GOAL = Vec2d(1000, 300)
+from envs.utils import WINDOW_X, WINDOW_Y, PEG_DEPTH, DT, TASK_TYPES, ORIGIN, VERTICAL_ORIGIN, GOAL, norm_pos, denorm_pos, denorm_point, norm_point, Arms, PivotJoint, PEG_GIRTH
 
-def norm_pos(pos):
-    assert isinstance(pos, Vec2d)
-    return Vec2d((pos.x-1000)/100, (pos.y-360)/100)
-
-def denorm_pos(pos):
-    assert isinstance(pos, Vec2d)
-    return Vec2d(pos.x*100 +1000, pos.y*100+360)
-
+collision_types = {'peg':1,
+                    'segment':2}
 
 class StaticEnvironment(object):
-    def __init__(self, space, GOAL, sprites = None):
+    def __init__(self, space, GOAL, sprites = None, vertical = False, expert = True, sparse = False):
         self.sprites = sprites
         self.space = space
-        self.ORIGIN = ORIGIN
+        self.ORIGIN = ORIGIN if not vertical else VERTICAL_ORIGIN
         self.GOAL = GOAL
         self.tmp_GOAL = GOAL
         self.PEG_DEPTH = PEG_DEPTH
         self.tmp_PEG_DEPTH = PEG_DEPTH
         self.PEG_GIRTH = PEG_GIRTH
         self.tmp_PEG_GIRTH = PEG_GIRTH
-        self.theta = 0.0
-        self.tmp_theta = 0.0
         self.tmp_GOAL = None
         self.env_statics = []
+        self.target_line = []
+        self.encountered = 0
+        self.sparse = sparse
+        self.expert = expert
+        self.det_draw = False
+        self.vertical = vertical
+        self.theta = 0.0 if not vertical else -np.pi/2
+        self.tmp_theta = 0.0 if not vertical else -np.pi/2
         self.make_static_env()
 
     def add_static_segment(self, position, endpoint_e, radius = 3.0, elasticity = 0.8, friction = 0.7):
@@ -70,6 +66,7 @@ class StaticEnvironment(object):
         # Make a static segment (floor)
         segment_shape = pymunk.Segment(self.space.static_body, (0, 0), endpoint_e, radius)
         #segment_shape.id = 1
+        segment_shape.collision_type = collision_types['segment']
         segment_shape.body.position = position
         segment_shape.elasticity = elasticity
         segment_shape.friction = friction
@@ -92,12 +89,11 @@ class StaticEnvironment(object):
         self.env_statics = []
         if alterations is None:
             alterations = dict(
-                peg_pos_x = (np.random.rand()-0.5)*self.GOAL.x/20,
-                peg_pos_y = (np.random.rand()-0.5)*self.GOAL.y/10,
+                peg_pos_x = (np.random.rand()-0.5)*WINDOW_X/25,
+                peg_pos_y = (np.random.rand()-0.5)*WINDOW_Y/25,
                 peg_width = (np.random.rand()-0.5)*self.PEG_GIRTH/5,
                 peg_depth = (np.random.rand()-0.5)*self.PEG_DEPTH/10,
                 theta = (np.random.rand() - 0.5)/2, 
-                # ORIGIN = Vec2d((np.random.rand()-0.5)*self.GOAL.x/10,(np.random.rand()-0.5)*self.GOAL.x/10),
             )
         self.make_static_env(alterations = alterations)
         # Modify goal pos (x,y) by a noisy amount.
@@ -109,6 +105,12 @@ class StaticEnvironment(object):
         seg_list is a list of tuples containing args for add_static_segment
         settings is a hard-coded dictionary of task descriptors.
         """
+        if self.vertical:
+            self.make_vertical_env(alterations = alterations)
+        else:
+            self.make_horizontal_env(alterations = alterations)
+
+    def make_horizontal_env(self, alterations = None):
         # Static Coordinates for peg
         if alterations is None:
             peg_pos_x = self.GOAL.x 
@@ -116,7 +118,6 @@ class StaticEnvironment(object):
             peg_girth = self.PEG_GIRTH
             peg_depth = self.PEG_DEPTH
             theta = self.theta #(np.random.rand() - 0.5)/2
-            # ORIGIN = self.ORIGIN
         else:
             # print("Altering the task...")
             peg_pos_x = self.GOAL.x + alterations['peg_pos_x']
@@ -124,7 +125,6 @@ class StaticEnvironment(object):
             peg_girth = self.PEG_GIRTH + alterations['peg_width']
             peg_depth = self.PEG_DEPTH + alterations['peg_depth']
             theta = self.theta + alterations['theta']
-            # ORIGIN = self.ORIGIN + alterations['ORIGIN']
         thresh = 1000
 
         len_peg_y = peg_depth*np.sin(theta)
@@ -141,50 +141,118 @@ class StaticEnvironment(object):
         self.tmp_PEG_DEPTH = peg_depth
         self.tmp_PEG_GIRTH = peg_girth
         self.tmp_theta = theta
-        # self.ORIGIN = ORIGIN
 
         for segment in seg_list:
             self.add_static_segment(*segment)
 
-class Arms:
-    def __init__(self, arm_lengths, thickness = 4, radii = [5,5,10]):
-        self.lengths = arm_lengths
-        self.n = len(self.lengths)
-        self.radii = radii
-        self.thickness = thickness
-        self.pos = [None]*self.n
-        self.arm_vecs = [None]*self.n
+    def make_vertical_env(self, alterations = None):
+        # Static Coordinates for peg
+        if alterations is None:
+            peg_pos_x = self.GOAL.x 
+            peg_pos_y = self.GOAL.y
+            peg_girth = self.PEG_GIRTH
+            peg_depth = self.PEG_DEPTH
+            theta = self.theta 
+        else:
+            # print("Altering the task...")
+            peg_pos_x = self.GOAL.x + alterations['peg_pos_x']
+            peg_pos_y = self.GOAL.y + alterations['peg_pos_y']
+            peg_girth = self.PEG_GIRTH + alterations['peg_width']
+            peg_depth = self.PEG_DEPTH + alterations['peg_depth']
+            theta = self.theta + alterations['theta']
+        thresh = 1000
 
-class PivotJoint:
-    def __init__(self, space, b, b2, a=(0, 0), a2=(0, 0), collide=True):
-        joint = pymunk.constraint.PinJoint(b, b2, a, a2)
-        joint.collide_bodies = collide
-        self.joint = joint
-        space.add(joint)
+        len_peg_y = peg_depth*np.sin(theta)
+        len_peg_x = peg_depth*np.cos(theta)
 
-class Segment:
-    def __init__(self, space, p0, v, radius=10):
-        self.body = pymunk.Body()
-        self.body.position = p0
-        shape = pymunk.Segment(self.body, (0, 0), v, radius)
-        shape.density = 0.1
-        shape.elasticity = 0.5
-        shape.filter = pymunk.ShapeFilter(group=1)
-        shape.color = (0, 255, 0, 0)
-        space.add(self.body, shape)
+        seg_list = [(Vec2d(0-thresh, peg_pos_y), Vec2d(peg_pos_x - peg_girth//2 + thresh, 0)),
+                    (Vec2d(peg_pos_x - peg_girth//2, peg_pos_y),Vec2d(len_peg_x, len_peg_y)),
+                    (Vec2d(peg_pos_x - peg_girth//2 + len_peg_x, peg_pos_y + len_peg_y),Vec2d(peg_girth,0)),
+                    (Vec2d(peg_pos_x + peg_girth//2 + len_peg_x, peg_pos_y + len_peg_y),Vec2d(-len_peg_x,-len_peg_y)),
+                    (Vec2d(peg_pos_x + peg_girth//2, peg_pos_y),Vec2d(thresh + WINDOW_X - peg_pos_x - peg_girth//2,0))]
+
+        self.goal_pos = Vec2d(peg_pos_x, peg_pos_y)
+        self.tmp_GOAL = self.goal_pos
+        self.tmp_PEG_DEPTH = peg_depth
+        self.tmp_PEG_GIRTH = peg_girth
+        self.tmp_theta = theta
+        for segment in seg_list:
+            self.add_static_segment(*segment)
+
+    def reward_func(self, obs):
+        mask = False
+
+        r_peg_tip = denorm_pos(Vec2d(obs[0], obs[1]))
+        if self.expert:
+            r_peg_tip = self.tmp_GOAL - denorm_pos(Vec2d(obs[0], obs[1]))
+        peg_tip = r_peg_tip + self.ORIGIN
+        goal_offset = 10
+
+        if self.vertical:
+            rpos_x = (self.tmp_GOAL.x + self.tmp_PEG_DEPTH*np.cos(self.tmp_theta) - peg_tip.x)/WINDOW_Y
+            rpos_y = (self.tmp_GOAL.y + self.tmp_PEG_DEPTH*np.sin(self.tmp_theta) - peg_tip.y)/WINDOW_X
+        else:
+            rpos_x = (self.tmp_GOAL.x + self.tmp_PEG_DEPTH*np.cos(self.tmp_theta) - peg_tip.x)/WINDOW_X
+            rpos_y = (self.tmp_GOAL.y + self.tmp_PEG_DEPTH*np.sin(self.tmp_theta) - peg_tip.y)/WINDOW_Y
+
+        reward = -2*Vec2d(rpos_x, rpos_y).length 
+        # print(obs[0], obs[1], obs[2], obs[3], peg_tip, reward)
+        # if reward > -0.04:
+        #     self.encountered += 1
+        #     mask = True
+        if self.vertical:
+            # print(peg_tip.y, self.GOAL.y, self.tmp_GOAL.y, self.tmp_PEG_DEPTH*np.sin(self.tmp_theta))
+            if peg_tip.y < self.tmp_GOAL.y + self.tmp_PEG_DEPTH*np.sin(self.tmp_theta) + goal_offset:
+                self.encountered += 1
+                mask = True
+        elif not self.vertical:
+            if peg_tip.x > self.tmp_GOAL.x + self.tmp_PEG_DEPTH*np.cos(self.tmp_theta) - goal_offset:
+                self.encountered += 1
+                mask = True
+        if mask is False:
+            if reward > -0.04:
+                self.encountered +=1
+                mask = True
+        if self.sparse:
+            return int(mask), mask
+        return reward, mask
+
+    def draw_target(self):
+        try:
+            self.remove_target()
+        except:
+            pass
+        finally:
+            body = self.space.static_body
+            relative_pos = self.GOAL - self.tmp_GOAL 
+            if self.vertical:
+                target_line = pymunk.Segment(body, (relative_pos.x-self.tmp_PEG_GIRTH/2, -WINDOW_Y), (relative_pos.x-self.tmp_PEG_GIRTH/2, WINDOW_Y), radius = 2)
+            else:
+                target_line = pymunk.Segment(body, (-WINDOW_X, relative_pos.y-self.tmp_PEG_GIRTH/2), (WINDOW_X, relative_pos.y-self.tmp_PEG_GIRTH/2), radius = 2)
+            target_line.filter = pymunk.ShapeFilter(group=1)
+            target_line.color = (0, 255, 0) if self.det_draw else (255, 0, 0)
+            # filter = pymunk.ShapeFilter(mask=pymunk.ShapeFilter.ALL_MASKS ^ 0b1)
+            self.target_line.append(target_line)
+            self.space.add(target_line)
+
+    def remove_target(self):
+        self.space.remove(self.target_line)
+        self.target_line = []
+
 
 class RobotEnvironment(object):
-    def __init__(self, space, arm_lengths = [250, 200, 200], radii = [5, 5, 10], GOAL = (1000, 400), expert = False):
+    def __init__(self, space, arm_lengths = [250, 200, 200], radii = [5, 5, 10], GOAL = (1000, 400), expert = False, vertical = False):
         self.space = space
         self.GOAL = GOAL
         self.tmp_GOAL = GOAL
-        self.ORIGIN = ORIGIN
+        self.ORIGIN = ORIGIN if not vertical else VERTICAL_ORIGIN
         self.PivotPoints = [None]*(1+len(arm_lengths))
         self.PivotPoints[0] = (self.ORIGIN,0)
         self.Arms = Arms(arm_lengths, radii = radii)
         self.range_multiplier = 5
-        self.set_action_range(vals = [(2, 20), (1, np_pi/16)]) # 2 Velocities and 1 angular velocity
+        self.set_action_range(vals = [(2, 20), (1, np_pi/8)]) # 2 Velocities and 1 angular velocity
         self.expert = expert
+        self.vertical = vertical
 
         self.init_arms()
         self.init_robot()
@@ -216,25 +284,40 @@ class RobotEnvironment(object):
             len_y = 0
             for idx in range(self.Arms.n):
                 rand_angle = 0.5*np_pi*(random_sample() - 0.5)
-                if idx is 0:
-                    rand_angle *= 2
-                if idx is self.Arms.n - 1:
-                    rand_angle *= 0.5
-                if idx is self.Arms.n:
-                    raise ValueError("Wrong init")
+                if self.vertical:
+                    rand_angle -= np.pi/2
+                    if idx is 0:
+                        rand_angle +=  np_pi*(random_sample() - 0.5)
+                    if idx is self.Arms.n - 1:
+                        rand_angle -=  0.5*np_pi*(random_sample() - 0.5)
+                    if idx is self.Arms.n:
+                        raise ValueError("Wrong init")
+                else:
+                    if idx is 0:
+                        rand_angle *= 2
+                    if idx is self.Arms.n - 1:
+                        rand_angle *= 0.5
+                    if idx is self.Arms.n:
+                        raise ValueError("Wrong init")
                 length = self.Arms.lengths[idx]
                 len_x += length*cos(rand_angle)
                 len_y += length*sin(rand_angle)
                 self.Arms.pos[idx] = (length, rand_angle)
-            if (50 < ( self.tmp_GOAL.x - self.ORIGIN[0] - len_x) < 250 and 
-                 abs(len_y + self.ORIGIN[1] - self.tmp_GOAL.y) < 100):
-                got = True
+            if self.vertical:
+                if (abs( self.tmp_GOAL.x - self.ORIGIN[0] - len_x) < 100 and 
+                    200 > (self.ORIGIN[1] - self.tmp_GOAL.y + len_y) > 100):
+                    got = True
+            elif not self.vertical:
+                if (abs(self.tmp_GOAL.y - self.ORIGIN[1] - len_y) < 100 and 
+                    -200 < (len_x + self.ORIGIN[0] - self.tmp_GOAL.x) < - 100):
+                    got = True
+            if not got:
                 if iterator > 1000:
                     print(f"Got at {iterator}")
                     raise ArithmeticError("Cannot get an environment like that, change the origin")
-            else:
-                iterator += 1
-                self.Arms.pos = [None]*self.Arms.n
+                else:
+                    iterator += 1
+                    self.Arms.pos = [None]*self.Arms.n
 
     def get_vertices(self, arm_data):
         thc = self.Arms.thickness
@@ -308,8 +391,8 @@ class RobotEnvironment(object):
 
             # Make peg heavy to gain control
             if idx+1 is len(self.Arms.pos):
-                mass = 10
-                moment = 100
+                mass = 1
+                moment = 10
             else:
                 mass = 1
                 moment = 10
@@ -320,9 +403,19 @@ class RobotEnvironment(object):
             body.start_angle = arm_data[1]
 
             body.id = 'peg' if idx+1 is len(self.Arms.pos) else f'arm{idx+1}'
+
             body.velocity_func = self.limit_velox
             shape = pymunk.Poly(body, vertices, t,  radius = self.Arms.radii[idx])
             shape.filter = pymunk.ShapeFilter(group = 1)
+            if body.id == 'peg':
+                pass
+                # shape_tip = pymunk.Circle(body, self.Arms.radii[idx] + self.Arms.thickness, (arm_data[0]/2, 0))
+                # shape_tip.collision_type = collision_types['peg']
+                # shape_tip.elasticity = 0.5
+                # shape_tip.color = (255, 0, 0, 0)
+                # shape_tip.friction = 0.8
+                # shape_tip.density = 1
+                # self.space.add(shape_tip)
             shape.elasticity = 0.5
             shape.color = (0, 255, 0, 0)
             shape.friction = 0.8
@@ -357,11 +450,23 @@ class RobotEnvironment(object):
             if idx < len(self.bodies) - 1:
                 pj = PivotJoint(self.space, body, self.bodies[idx + 1], body.world_to_local(self.PivotPoints[idx][0]),
                            self.bodies[idx+1].world_to_local(self.PivotPoints[idx][0]))
-                # motor = pymunk.constraint.SimpleMotor(body, self.bodies[idx + 1], 0)
-                # motor.max_force = 10000000
-                # self.space.add(motor)
+                if self.bodies[idx + 1].id != 'peg':
+                    motor = pymunk.constraint.SimpleMotor(body, self.bodies[idx + 1], 0)
+                    motor.max_force = 100000
+                    self.space.add(motor)
+                    self.motors.append(motor)
+                else:
+                    self.motors.append("NO MOTOR IN PEG")
                 self.joints.append(pj.joint)
-                # self.motors.append(motor)
+        # for idx, body in enumerate(self.bodies):
+        #     if idx < len(self.bodies) - 1:
+        #         pj = PivotJoint(self.space, body, self.bodies[idx + 1], body.world_to_local(self.PivotPoints[idx][0]),
+        #                    self.bodies[idx+1].world_to_local(self.PivotPoints[idx][0]))
+        #         # motor = pymunk.constraint.SimpleMotor(body, self.bodies[idx + 1], 0)
+        #         # motor.max_force = 10000000
+        #         # self.space.add(motor)
+        #         self.joints.append(pj.joint)
+        #         # self.motors.append(motor)
 
     def denorm_action(self, action):
         """
@@ -383,6 +488,9 @@ class RobotEnvironment(object):
         return p1*(action-p2)
 
     def get_peg_tip(self):
+        """
+        Position Output: peg_tip is relative to the origin of the robot arm. 
+        """
         peg_tip = Vec2d(self.ORIGIN) if isinstance(self.ORIGIN, tuple) else self.ORIGIN
         lengths = self.Arms.lengths
         idx = 0
@@ -400,20 +508,19 @@ class RobotEnvironment(object):
             [1] Scalar VELOCITY (mid-center of body arms).
             [2,3] Scalar cos, sin of ANGLE.
         """
-
-        peg = self.get_peg_tip()
+        r_peg = self.get_peg_tip() - self.ORIGIN
         body = self.bodies[-1]
         true_angle = body.angle
         assert body.id is 'peg'
 
         # Meta RL obs
-        peg_ = norm_pos(peg)
+        r_peg_ = norm_pos(r_peg)
         # Expert case, use relative distance to the goal.
         if self.expert:
             # print("Expert Active")
-            peg_ = norm_pos(self.GOAL - peg) 
+            r_peg_ = norm_pos(self.tmp_GOAL - r_peg) 
 
-        self.obs = [peg_.x, peg_.y, np.cos(true_angle), np.sin(true_angle)]
+        self.obs = [r_peg_.x, r_peg_.y, np.cos(true_angle), np.sin(true_angle)]
         
         # RL algorithm obs
         # self.obs = [self.GOAL.x - peg.x, self.GOAL.y - peg.y, np.cos(true_angle), np.sin(true_angle)]
@@ -426,30 +533,25 @@ class Frontend(pyglet.window.Window):
         self.set_visibles()
         self.options = DrawOptions()
 
-        self.spaces = []
-        self.envs = []
-        self.robos = []
-
         space = pymunk.Space()
         space.gravity = (0, 0) 
-        space.damping = 0.99
+        space.damping = 0.95
         self.space = space
-        env = StaticEnvironment(self.space, GOAL = GOAL)
+        # GOAL = Vec2d(300, 320)
+        env = StaticEnvironment(self.space, GOAL = GOAL, vertical = True, expert = False)
         self.env = env
-        robo = RobotEnvironment(self.space, arm_lengths=[300, 250, 200], radii = [10, 7, 10], GOAL=GOAL)
+        arm_lengths = [325 + 50, 275 + 110, 200 + 75]
+        robo = RobotEnvironment(self.space, arm_lengths=arm_lengths, radii = [10, 7, 10], GOAL=GOAL, vertical=True, expert = False)
         self.robo = robo
 
         self.action_range = {'low':self.robo.action_low, 'high':self.robo.action_high}
-        self.num_obss = 2 + 2 # FROM PEG obs
+        self.num_obs = 2 + 2 # FROM PEG obs
         self.num_actions = 2 + 1 # FROM PEG VELOX
         self._max_episode_steps = 0
         self._denorm_process = True
         self._print_counter = 0
         self.evaluate = True
         self.encountered = 0
-
-    def get_all_task_idx(self):
-        return range(len(self.spaces))
 
     @property
     def denorm_process(self):
@@ -473,6 +575,9 @@ class Frontend(pyglet.window.Window):
         else:
             print("Please enter a valid maximum step size")
 
+    def reward_func(self, obs):
+        return self.env.reward_func(obs)
+
     def random_action(self):
         rand = np.random.random(3)*2-1
         # if self.denorm_process:
@@ -491,6 +596,7 @@ class Frontend(pyglet.window.Window):
 
     def reset(self):
         self.robo.reset_bodies(random_reset = True)
+        assert self.env.ORIGIN == self.robo.ORIGIN
         return self.robo.get_obs()
 
     def step_func(self, action, dt = 1/60, step = 0):
@@ -515,43 +621,18 @@ class Frontend(pyglet.window.Window):
 
         return new_obs, reward, done, dummy
 
-    def update(self, dt = 1/60, action = None):
-
+    def update(self, dt = DT, action = None):
         if action is not None:
             peg = self.robo.bodies[-1]
-            peg.velocity = action[0], action[1]
-            peg.angular_velocity = action[2]
-
-        for r in range(10):
-            self.space.step(dt)
-
-    def reward_func(self, done, obs):
-
-        mask = done
-
-        # obs = self.robo.get_obs()
-
-        reward =  -Vec2d(obs[0], obs[1]).length/1000 #(obs[0] - WINDOW_X)/WINDOW_X #
-
-        peg_tip = self.robo.get_peg_tip()
-
-        if peg_tip.x > 975 and abs(peg_tip.y - self.env.GOAL.y) < 50 and abs(obs[-1]) < 0.20: #
-            # print("ALmost Made it")
-            reward += 0.1
-
-        if peg_tip.x > self.env.GOAL.x and abs(peg_tip.y - self.env.GOAL.y) < 25 and abs(obs[-1]) < 0.10: #
-            reward += 0.5
-
-        if peg_tip.x > self.env.GOAL.x + 50:
-            reward += 1
-
-        if peg_tip.x > self.GOAL.x + 100:
-            reward += 20
-            self.encountered += 1
-            mask = True
-            print(f"\n MADE IT {self.encountered} TIMES TO GOAL \n")
-
-        return reward, mask
+            
+            for _ in range(20): # WAS 30
+                # print(action, peg.velocity, peg.angular_velocity)
+                peg.velocity = (1-self.mu_avg)*peg.velocity + self.mu_avg*Vec2d(action[0], action[1])
+                peg.angular_velocity = (1-self.mu_avg)*peg.angular_velocity + self.mu_avg*action[2]
+                self.space.step(dt/20)
+        else:
+            for _ in range(20):
+                self.space.step(dt/20)
 
     def policy_update(self, dt):
         obs = np.array(self.robo.get_obs())
@@ -577,22 +658,6 @@ class Frontend(pyglet.window.Window):
         pyglet.clock.schedule_interval(self.policy_update, 1/60)
         pyglet.app.run()
 
-    def _draw_decorator(func):
-        @functools.wraps(func)
-        def wrapped(inst, *args, **kwargs):
-            if not inst.check():
-                return
-            return #func(inst, *args, **kwargs)
-        return wrapped
-
-    def check(self):
-        if self.show or self.show_iter%250 == 0:
-            self.show_iter = 0
-            return True
-        else:
-            return False
-
-    # @_draw_decorator
     def on_draw(self):
         # if self.check:
         self.clear() # clear the buffer
@@ -628,7 +693,7 @@ class Frontend(pyglet.window.Window):
             action = np.random.sample(3)*2-1
             self.robo.action_buffered = self.robo.denorm_action(action)
 
-        c = 10
+        c = 100
         if symbol == pyglet.window.key.UP:
             bodies[-1].velocity += Vec2d(0,c)
         if symbol == pyglet.window.key.DOWN:
@@ -649,10 +714,11 @@ class Frontend(pyglet.window.Window):
             pyglet.image.get_buffer_manager().get_color_buffer().save('RobotArm.png')
 
     def on_mouse_press(self, x, y, button, modifier):
-        r, d, angle, peg_tip = self.reward_func(False)
+        r, d = self.reward_func(obs = self.robo.get_obs())
 
-        print(r, d, angle, peg_tip)
-
+        print(r, d)
+        print(self.robo.get_obs())
+        print(self.robo.bodies[-1].force)
         point_q = self.space.point_query_nearest((x,y), 0, pymunk.ShapeFilter())
         if point_q:
             print(point_q.shape, point_q.shape.body)
@@ -662,7 +728,6 @@ class Frontend(pyglet.window.Window):
 
 def coll_begin(arbiter, space, data):
     # print(f'New Collision {arbiter.shapes}')
-    pass
     return True
 
 def coll_pre(arbiter, space, data):
@@ -671,8 +736,16 @@ def coll_pre(arbiter, space, data):
     return True
 
 def coll_post(arbiter, space, data):
-    # print('Postprocess collision')
+    print(np.log(-arbiter.total_impulse[0]))
+    # print(dir(arbiter))
+    contact_points = []
+    """Append the contact point to the contact_points list."""
+    if arbiter.is_first_contact:
+        for contact in arbiter.contact_point_set.points:
+            contact_points.append(contact.point_a)
     """Calls during contact"""
+    print(contact_points)
+
     pass
 
 def coll_separate(arbiter, space, data):
@@ -687,7 +760,9 @@ if __name__ == "__main__":
 
     # TODO - Set motors instead.
 
-    handler = frontend.space.add_default_collision_handler()
+    handler = frontend.space.add_collision_handler(
+                collision_types["peg"],
+                collision_types["segment"])
     handler.begin = coll_begin
     handler.pre_solve = coll_pre
     handler.post_solve = coll_post

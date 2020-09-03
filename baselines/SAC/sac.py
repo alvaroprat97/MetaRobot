@@ -100,9 +100,9 @@ class SAC(object):
         unpacked = [torch.cat(x, dim=0) for x in unpacked]
         return unpacked
 
-    def get_action(self, state, evaluate=False):
+    def get_action(self, state, evaluate=False, deterministic = False):
         state = torch.FloatTensor(state).to(self.device).unsqueeze(0)
-        if evaluate is False:
+        if not (deterministic or evaluate):
             action, _, _ = self.policy.sample(state)
         else:
             _, _, action = self.policy.sample(state)

@@ -29,6 +29,7 @@ class MultiTaskRLAlgorithm(object):
             agent,
             train_tasks,
             eval_tasks,
+            task_name = None,
             num_epochs= 25,
             num_tasks_sample = 8,
             num_eval_steps_per_epoch= 250,
@@ -61,7 +62,7 @@ class MultiTaskRLAlgorithm(object):
         self.writer = None
         self.env = env
         self.agent = agent
-
+        self.task_name = task_name
         self.path_type = ["random", "exploration", "eval"]
         self.memory_steps = 0
         self.updates = 0
@@ -174,4 +175,4 @@ class MultiTaskRLAlgorithm(object):
                 self.env.reset_task(idx)
                 self.collect_data("eval")
 
-            self.agent.save_model("ExpertPeg2D")
+            self.agent.save_model(self.task_name)

@@ -12,10 +12,12 @@ except:
 from pymunk import Vec2d
 import functools
 from pymunk.pyglet_util import DrawOptions
+
 import pymunkoptions
 pymunkoptions.options["debug"] = False
 from configs.tasks import random_tasks
-from envs.MetaPeg2D import RobotEnvironment, StaticEnvironment, WINDOW_X, WINDOW_Y, ORIGIN, PEG_DEPTH, DT, ORIGIN, norm_pos, denorm_pos
+from envs.MetaPeg2D import RobotEnvironment, StaticEnvironment
+from envs.utils import WINDOW_X, WINDOW_Y, ORIGIN, PEG_DEPTH, DT, norm_pos, denorm_pos
 
 
 class ENV(object):
@@ -31,7 +33,7 @@ class ENV(object):
         arm_lengths = [325 + 50, 275 + 110, 200 + 75]
         self.arm_lengths = arm_lengths
 
-        # Create task repertoire
+        # Create task repertoire for Peg2D
         for GOAL in GOALS:
             space = pymunk.Space()
             space.gravity = (0, 0) 
@@ -142,26 +144,7 @@ class ENV(object):
                 self.spaces[self.task_idx].step(dt/20)
 
     def reward_func(self, obs):
-    
-        mask = False
-        peg_tip = denorm_pos(Vec2d(obs[0], obs[1])) if not self.expert else self.robos[self.task_idx].get_peg_tip()
-
-        goal_offset = 20
-
-        rpos_x = (self.statics[self.task_idx].tmp_GOAL.x + self.statics[self.task_idx].tmp_PEG_DEPTH*np.cos(self.statics[self.task_idx].tmp_theta) - peg_tip.x)/WINDOW_X
-        rpos_y = (self.statics[self.task_idx].tmp_GOAL.y + self.statics[self.task_idx].tmp_PEG_DEPTH*np.sin(self.statics[self.task_idx].tmp_theta) - peg_tip.y)/WINDOW_Y
-
-        reward = -Vec2d(rpos_x, rpos_y).length + 0.1*(obs[-2])*abs(obs[-2]) - 0.1
-        # reward = np.clip(reward,-np.inf,0)
-
-        if peg_tip.x > self.statics[self.task_idx].tmp_GOAL.x + self.statics[self.task_idx].tmp_PEG_DEPTH*np.cos(self.statics[self.task_idx].tmp_theta) - goal_offset:
-            # reward = 1
-            self.encountered += 1
-            mask = True
-            # if self.encountered%2 == 0:
-                # print(f"\n MADE IT {self.encountered} TIMES TO GOAL \n")
-
-        return reward, mask
+        return self.statics[self.task_idx].reward_func(obs)
 
     def _get_targets(self, indices, altered = False):
         if altered:
@@ -204,6 +187,9 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
         self.trajectory["agent_infos"] = []
         self.trajectory["env_infos"] = []
         self.trajectory['belief'] = [] 
+        self.trajectory['z_mu'] = []
+        self.trajectory['z'] = []
+        self.trajectory['z_vars'] = []
 
     def run_policy(self, agent):
         self.set_visible(visible = True)
@@ -261,46 +247,32 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
         else:
             return False
 
-    def draw_target(self):
-        try:
-            self.remove_target()
-        except:
-            pass
-        finally:
-            body = self.spaces[self.task_idx].static_body
-            relative_pos = self.GOALS[self.task_idx].y - self.statics[self.task_idx].tmp_GOAL 
-            target_line = pymunk.Segment(body, (-WINDOW_X, relative_pos.y-self.statics[self.task_idx].tmp_PEG_GIRTH/2), (WINDOW_X, relative_pos.y-self.statics[self.task_idx].tmp_PEG_GIRTH/2), radius = 2)
-            target_line.filter = pymunk.ShapeFilter(group=1)
-            target_line.color = (0, 255, 0) if self.det_draw else (255, 0, 0)
-            # filter = pymunk.ShapeFilter(mask=pymunk.ShapeFilter.ALL_MASKS ^ 0b1)
-            self.target_line.append(target_line)
-            self.spaces[self.task_idx].add(target_line)
-
-    def remove_target(self):
-        self.spaces[self.task_idx].remove(self.target_line)
-        self.target_line = []
-
-    def save_transition(self, transition):
+    def save_transition(self, transition, agent = None):
         obs, action_raw, r, next_obs, d = transition
         self.trajectory['observations'].append(obs)
         self.trajectory['actions'].append(action_raw)
         self.trajectory['next_observations'].append(next_obs)
         self.trajectory['rewards'].append(r)
         self.trajectory['terminals'].append(d)
-        self.trajectory['agent_infos'].append(0),
-        self.trajectory['env_infos'].append(0),
+        self.trajectory['agent_infos'].append(0)
+        self.trajectory['env_infos'].append(0)
+        if agent is not None:
+            self.trajectory['z_mu'].append(agent.z_means.detach())
+            self.trajectory['z'].append(agent.z.detach())
+            self.trajectory['z_vars'].append(agent.z_vars.detach())
 
     def infer_belief(self, agent, infer = True, prior = False):
         aux_posterior, sampled_belief, belief = None, None, None
         if infer:
             if not prior:
-                full_context = agent.context
-                _, nc, _ = full_context.size()
-                size = min(nc, 128)
-                idxes = np.random.randint(nc, size = size)
-                context = full_context[:,idxes,:]
-                print(full_context.shape, context.shape)
-                agent.infer_posterior(context)
+                # full_context = agent.context
+                # _, nc, _ = full_context.size()
+                # size = min(nc, 128)
+                # memo_idx = 0 
+                # idxes = np.random.randint(memo_idx, nc, size = size)
+                # context = full_context[:,idxes,:]
+                agent.infer_posterior(agent.context)
+                # agent.infer_posterior(agent.context)
             else:
                 agent.sample_z()
             aux_posterior = agent.aux_decoder(agent.z)
@@ -320,7 +292,7 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
         self.init_trajectory()
 
     def rollout_update(self, dt, agent, accum_context, max_steps, sparse_rewards, continuous_update, deterministic = False):
-        self.det_draw = deterministic
+        self.statics[self.task_idx].det_draw = deterministic
         if self.rollout_counter == 0:
             self.trajectories = []
             self.init_trajectory()
@@ -338,15 +310,17 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
         obs = np.array(self.robos[self.task_idx].get_obs()) 
         action_raw, _ = agent.get_action(obs, deterministic)
         next_o, r, d, env_info = self.step(action_raw)
-        self.save_transition(tuple((obs, action_raw, r, next_o, d)))
+        self.save_transition(tuple((obs, action_raw, r, next_o, d)), agent = agent)
         if sparse_rewards:
             r = 0
             if d:
                 r = 1
         if accum_context:
             agent.update_context([obs, action_raw, r, next_o, d, env_info])
+        # else:
+        #     self.accum = False
         # TODO in configs: context_window
-        context_window = 10
+        context_window = 25
         if continuous_update and self.traj_rollout_counter%context_window is 0:
             self.infer_belief(agent, infer = True, prior = False)
             print(f"Updating continuous belief at traj {self.traj_rollout_counter} and roll {self.rollout_counter}")
@@ -354,8 +328,8 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
             if d or (self.traj_rollout_counter + 1)%max_steps is 0:
                 self.infer_belief(agent, infer = True, prior = False)
                 print(f"Updating trajctory belief at traj {self.traj_rollout_counter} and roll {self.rollout_counter}")
-            elif (self.traj_rollout_counter + 1)/context_window:
-                self.infer_belief(agent, infer = True, prior = True)
+            elif (self.traj_rollout_counter + 1)%context_window is 0:
+                self.infer_belief(agent, infer = True, prior = False)
         else:
             self.infer_belief(agent, infer=False, prior = False)
         if d:
@@ -408,6 +382,7 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
 
     def view_rollout(self, agent, accum_context, max_steps, sparse_rewards = False, continuous_update = False, deterministic = False):
         self.traj_rollout_counter = 0
+        # self.accum = accum_context
         self.draw_target()
         print("Speeding out DT by factor 5")
         pyglet.clock.schedule_interval(self.rollout_update, DT/5, agent, accum_context, max_steps, sparse_rewards, continuous_update, deterministic)
@@ -468,6 +443,11 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
         self.clear() # clear the buffer
         # Order matters here!
         self.spaces[self.task_idx].debug_draw(self.options)
+        self.label = pyglet.text.Label(f'TASK {self.task_idx}',
+                          font_size=36,
+                          x=WINDOW_X*0.9, y=WINDOW_Y*0.95,
+                          anchor_x='center', anchor_y='center')
+        self.label.draw()
         self.fps.draw()
 
     # def on_key_release(self, symbol, modifiers):
@@ -519,10 +499,10 @@ class VisualiserWrapper(pyglet.window.Window, ENV):
             self.reset()
 
         if symbol == key.Z:
-            self.draw_target()
+            self.statics[self.task_idx].draw_target()
         
         if symbol == key.X:
-            self.remove_target()
+            self.statics[self.task_idx].remove_target()
 
         if symbol == key.T:
             self.task_idx = self.task_idx + 1 if self.task_idx + 1 < len(self.spaces) else  0
